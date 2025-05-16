@@ -29,9 +29,7 @@ in vec2 v_TexCoord;      // Texture coordinates from vertex shader
 
 uniform sampler2D u_Texture; // Texture sampler
 uniform vec3 u_LightPos;     // Light position
-uniform vec3 u_ViewPos;      // Camera position
 uniform vec3 u_LightColor;   // Light color
-uniform vec3 u_ObjectColor;  // Object color
 
 out vec4 FragColor;
 
@@ -46,15 +44,8 @@ void main() {
     float diff = max(dot(norm, lightDir), 0.0);
     vec3 diffuse = diff * u_LightColor;
 
-    // Specular lighting
-    float specularStrength = 0.5;
-    vec3 viewDir = normalize(u_ViewPos - v_FragPos);
-    vec3 reflectDir = reflect(-lightDir, norm);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
-    vec3 specular = specularStrength * spec * u_LightColor;
-
     // Combine lighting components
-    vec3 lighting = (ambient + diffuse + specular) * u_ObjectColor;
+    vec3 lighting = ambient + diffuse;
 
     // Apply texture
     vec4 texColor = texture(u_Texture, v_TexCoord);

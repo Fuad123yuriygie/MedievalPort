@@ -13,6 +13,7 @@
 #include <string>
 #include <sstream>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 #include "Renderer.h"
 #include "VertexBuffer.h"
@@ -23,10 +24,60 @@
 #include "LoadModel.h"
 #include "ImguiInterface.h"
 
+// Alias for JSON library
+using json = nlohmann::json;
+
 // Variables for rotation angles
 float rotationX = 0.0f; // Rotation around X-axis
 float rotationY = 0.0f; // Rotation around Y-axis
 float rotationZ = 0.0f; // Rotation around Z-axis
+
+// Obj vector to store the loaded model data
+struct ModelData {
+    VertexArray* va;
+    IndexBuffer* ib;
+    VertexBuffer* vb;
+
+    // ~ModelData() {
+    //     delete va;
+    //     delete ib;
+    // }
+};
+std::vector<ModelData> objVector;
+
+// Function to save rotation values to a JSON file
+void SaveRotationValues(float rotationX, float rotationY, float rotationZ) {
+    json rotationData = {
+        {"rotationX", rotationX},
+        {"rotationY", rotationY},
+        {"rotationZ", rotationZ}
+    };
+
+    std::ofstream outFile("rotation_config.json");
+    if (outFile.is_open()) {
+        outFile << rotationData.dump(4); // Pretty print with 4 spaces
+        outFile.close();
+    } else {
+        std::cerr << "Failed to save rotation values to file." << std::endl;
+    }
+}
+
+// Function to load rotation values from a JSON file
+void LoadRotationValues(float& rotationX, float& rotationY, float& rotationZ) {
+    std::ifstream inFile("rotation_config.json");
+    if (inFile.is_open()) {
+        json rotationData;
+        inFile >> rotationData;
+
+        rotationX = rotationData.value("rotationX", 0.0f);
+        rotationY = rotationData.value("rotationY", 0.0f);
+        rotationZ = rotationData.value("rotationZ", 0.0f);
+
+        inFile.close();
+    } else {
+        std::cerr << "No rotation configuration file found. Using default values." << std::endl;
+    }
+}
 
 // Debug callback function
 void APIENTRY openglDebugCallback(GLenum source, GLenum type, GLuint id,
@@ -41,6 +92,42 @@ void setupDebugCallback() {
     glDebugMessageCallback(openglDebugCallback, nullptr);
 }
 
+// Drop callback function
+void DropCallback(GLFWwindow* window, int count, const char** paths) {
+    for (int i = 0; i < count; i++) {
+        std::string filePath = paths[i];
+        std::cout << "Dropped file: " << filePath << std::endl;
+
+        // Check if the file is an .obj file
+        if (filePath.substr(filePath.find_last_of(".") + 1) == "obj") {
+            std::vector<float> vertices;
+            std::vector<unsigned int> indices;
+
+            // Load the new .obj file
+            if (LoadObject(filePath.c_str(), vertices, indices)) {
+                std::cout << "Successfully loaded OBJ file: " << filePath << std::endl;
+
+                // Update the OpenGL buffers with the new model data
+                VertexArray* va = new VertexArray(); // Declare and initialize the VertexArray object
+                VertexBuffer* vb = new VertexBuffer(vertices.data(), vertices.size() * sizeof(float));
+                VertexBufferLayout layout;
+                layout.Push<float>(3); // Position (x, y, z)
+                layout.Push<float>(3); // Normal (nx, ny, nz)
+                layout.Push<float>(2); // Texture coordinates (u, v)
+                va->AddBuffer(*vb, layout);
+
+                IndexBuffer* ib = new IndexBuffer(indices.data(), indices.size());
+                objVector.push_back({ va, ib, vb }); // Store the new model data in the vector
+                std::cout << "Model data updated successfully." << std::endl;
+            } else {
+                std::cerr << "Failed to load OBJ file: " << filePath << std::endl;
+            }
+        } else {
+            std::cerr << "Unsupported file type: " << filePath << std::endl;
+        }
+    }
+}
+
 int main() {
     GLFWwindow* window;
 
@@ -53,7 +140,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
 
     // Create windowed mode window and its OpenGL context
-    window = glfwCreateWindow(640, 480, "Hello World", NULL, NULL);
+    window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Hello World", NULL, NULL);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -74,10 +161,13 @@ int main() {
     // Set up OpenGL debug callback
     setupDebugCallback();
 
+    // Set drop callback
+    glfwSetDropCallback(window, DropCallback);
+
     // Create MVP matrices
     glm::mat4 model = glm::mat4(1.0f);
     glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -3.0f));
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), 640.0f / 480.0f, 0.1f, 100.0f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
 
     Renderer renderer; // Create a Renderer instance
 
@@ -85,25 +175,27 @@ int main() {
     
     ImguiInterface imgui(window); // Create an ImguiInterface instance
 
-    // Load the OBJ file
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
+    // Load the OBJ file
     if (!LoadObject("../res/models/monkey.obj", vertices, indices)) {
         std::cout << "Failed to load OBJ file" << std::endl;
         return -1; // Exit if the OBJ file fails to load
     }
 
     // Create OpenGL buffers for the loaded OBJ data
-    VertexArray va;
-    VertexBuffer vb(vertices.data(), vertices.size() * sizeof(float));
+    VertexArray* va = new VertexArray(); // Create a new VertexArray object
+    VertexBuffer* vb = new VertexBuffer(vertices.data(), vertices.size() * sizeof(float));
 
     VertexBufferLayout layout;
     layout.Push<float>(3); // Position (x, y, z)
     layout.Push<float>(3); // Normal (nx, ny, nz)
     layout.Push<float>(2); // Texture coordinates (u, v)
-    va.AddBuffer(vb, layout);
 
-    IndexBuffer ib(indices.data(), indices.size());
+    va->AddBuffer(*vb, layout); // Add the vertex buffer to the vertex array
+    
+    IndexBuffer* ib = new IndexBuffer(indices.data(), indices.size());
+    objVector.push_back({ va, ib, vb }); // Store the model data in the vector
 
     Shader shader("../res/shaders/Basic.shader");
     shader.Bind();
@@ -132,15 +224,13 @@ int main() {
     }
     stbi_image_free(data);
 
+    // Load rotation values from file
+    LoadRotationValues(rotationX, rotationY, rotationZ);
+
     float lastFrameTime = 0.0f;
 
     // Render loop
     while (!glfwWindowShouldClose(window)) {
-        // Calculate delta time
-        // There are two ways delta time can be serverd
-        // 1. By the renderer
-        // 2. By the control
-        // 3. Or the window constructor? (Future)
         float currentFrameTime = (float)glfwGetTime();
         float deltaTime = currentFrameTime - lastFrameTime;
         lastFrameTime = currentFrameTime;
@@ -172,21 +262,22 @@ int main() {
         // Set uniforms for lighting
         shader.Bind();
         shader.SetUniform3f("u_LightPos", lightPos.x, lightPos.y, lightPos.z);
-        shader.SetUniform3f("u_ViewPos", viewPos.x, viewPos.y, viewPos.z);
-        shader.SetUniform3f("u_LightColor", 1.0f, 0.0f, 1.0f); // White light
-        shader.SetUniform3f("u_ObjectColor", 1.0f, 0.5f, 0.31f); // Object color
+        shader.SetUniform3f("u_LightColor", 1.0f, 0.0f, 0.0f); // White light
 
         // Pass model, view, and projection matrices
         glm::mat4 normalMatrix = glm::transpose(glm::inverse(model));
         shader.SetUniformMat4f("u_Model", glm::value_ptr(model));
         shader.SetUniformMat4f("u_NormalMat", glm::value_ptr(normalMatrix));
         shader.SetUniformMat4f("u_MVP", glm::value_ptr(mvp));
+        shader.SetUniform1i("u_Texture", 0);
 
         shader.Bind();
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
-        shader.SetUniform1i("u_Texture", 0);
-        renderer.Draw(va, ib);
+        
+        for(auto& it: objVector) {
+            renderer.Draw(*(it.va), *(it.ib));
+        }
         
         // Render ImGui
         imgui.ImguiRender(); // Render ImGui elements
@@ -194,6 +285,9 @@ int main() {
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
+
+    // Save rotation values to file
+    SaveRotationValues(rotationX, rotationY, rotationZ);
 
     glfwTerminate(); // Make seperate function/namespace/class for glfw codes
     return 0;

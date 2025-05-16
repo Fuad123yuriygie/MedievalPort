@@ -4,6 +4,9 @@
 #include "VertexArray.h"
 #include "IndexBuffer.h"
 
+#define SCREEN_WIDTH 1280
+#define SCREEN_HEIGHT 720
+
 class Renderer {
 public:
     // Constructor
