@@ -37,6 +37,9 @@ struct ModelData {
     VertexArray* va;
     IndexBuffer* ib;
     VertexBuffer* vb;
+    glm::vec3 position = glm::vec3(0.0f);
+    glm::vec3 rotation = glm::vec3(0.0f);
+    glm::vec3 scale    = glm::vec3(1.0f);
 
     // ~ModelData() {
     //     delete va;
@@ -140,7 +143,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
 
     // Create windowed mode window and its OpenGL context
-    window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Hello World", NULL, NULL);
+    window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Medieval Port", NULL, NULL);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -198,7 +201,7 @@ int main() {
     objVector.push_back({ va, ib, vb }); // Store the model data in the vector
 
     Shader shader("../res/shaders/Basic.shader");
-    shader.Bind();
+    shader.Bind(); // Bind the shader program
 
     // Load texture
     unsigned int texture;
@@ -228,6 +231,7 @@ int main() {
     LoadRotationValues(rotationX, rotationY, rotationZ);
 
     float lastFrameTime = 0.0f;
+    int selectedModel = 0; // Index of selected model
 
     // Render loop
     while (!glfwWindowShouldClose(window)) {
@@ -244,13 +248,25 @@ int main() {
         imgui.ImguiNewFrame(); // Start a new ImGui frame
 
         // ImGui window for rotation controls
-        imgui.ImguiFrameElement(rotationX, rotationY, rotationZ); // Create ImGui elements for rotation
+        if (!objVector.empty()) {
+            std::vector<const char*> modelLabels;
+            for (size_t i = 0; i < objVector.size(); ++i) {
+                static char label[32];
+                snprintf(label, sizeof(label), "Model %zu", i);
+                modelLabels.push_back(strdup(label));
+            }
+            ImGui::Combo("Select Model", &selectedModel, modelLabels.data(), (int)modelLabels.size());
 
-        // Update the model matrix with rotations
-        model = glm::mat4(1.0f);
-        model = glm::rotate(model, glm::radians(rotationX), glm::vec3(1.0f, 0.0f, 0.0f)); // Rotate around X-axis
-        model = glm::rotate(model, glm::radians(rotationY), glm::vec3(0.0f, 1.0f, 0.0f)); // Rotate around Y-axis
-        model = glm::rotate(model, glm::radians(rotationZ), glm::vec3(0.0f, 0.0f, 1.0f)); // Rotate around Z-axis
+            // Controls for selected model
+            ImGui::Separator();
+            ImGui::Text("Transform");
+            ImGui::DragFloat3("Position", glm::value_ptr(objVector[selectedModel].position), 0.01f);
+            ImGui::DragFloat3("Rotation", glm::value_ptr(objVector[selectedModel].rotation), 1.0f);
+            ImGui::DragFloat3("Scale",    glm::value_ptr(objVector[selectedModel].scale),    0.01f, 0.01f, 100.0f);
+            for(auto& it: modelLabels) {
+                free((void*) it);
+            }
+        }
 
         // Recalculate the MVP matrix
         glm::mat4 mvp = projection * view * model;
@@ -260,23 +276,30 @@ int main() {
         glm::vec3 viewPos(0.0f, 0.0f, 3.0f);  // Camera position
 
         // Set uniforms for lighting
-        shader.Bind();
         shader.SetUniform3f("u_LightPos", lightPos.x, lightPos.y, lightPos.z);
-        shader.SetUniform3f("u_LightColor", 1.0f, 0.0f, 0.0f); // White light
-
-        // Pass model, view, and projection matrices
-        glm::mat4 normalMatrix = glm::transpose(glm::inverse(model));
-        shader.SetUniformMat4f("u_Model", glm::value_ptr(model));
-        shader.SetUniformMat4f("u_NormalMat", glm::value_ptr(normalMatrix));
-        shader.SetUniformMat4f("u_MVP", glm::value_ptr(mvp));
-        shader.SetUniform1i("u_Texture", 0);
-
-        shader.Bind();
+        shader.SetUniform3f("u_LightColor", 0.0f, 1.0f, 1.0f); // Cyan light
+        
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
         
-        for(auto& it: objVector) {
-            renderer.Draw(*(it.va), *(it.ib));
+        // Render all models with their own transform
+        for (size_t i = 0; i < objVector.size(); i++) {
+            auto& modelData = objVector[i];
+            glm::mat4 modelMat = glm::mat4(1.0f);
+            modelMat = glm::translate(modelMat, modelData.position);
+            modelMat = glm::rotate(modelMat, glm::radians(modelData.rotation.x), glm::vec3(1,0,0));
+            modelMat = glm::rotate(modelMat, glm::radians(modelData.rotation.y), glm::vec3(0,1,0));
+            modelMat = glm::rotate(modelMat, glm::radians(modelData.rotation.z), glm::vec3(0,0,1));
+            modelMat = glm::scale(modelMat, modelData.scale);
+            
+            glm::mat4 mvp = projection * view * modelMat;
+            glm::mat4 normalMatrix = glm::transpose(glm::inverse(modelMat));
+            shader.SetUniformMat4f("u_Model", glm::value_ptr(modelMat));
+            shader.SetUniformMat4f("u_NormalMat", glm::value_ptr(normalMatrix));
+            shader.SetUniformMat4f("u_MVP", glm::value_ptr(mvp));
+            // shader.SetUniform1i("u_Texture", 0);
+            
+            renderer.Draw(*(modelData.va), *(modelData.ib));
         }
         
         // Render ImGui
