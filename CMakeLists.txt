@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Defines
 add_definitions(-DFUAD_LOCAL)
+add_definitions(-DDEBUG)
 add_definitions(-DTINYOBJLOADER_IMPLEMENTATION)
 
 # Add debug flags

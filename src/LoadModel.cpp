@@ -1,5 +1,5 @@
 #include "LoadModel.h"
-#include "tinyobj/tiny_obj_loader.h"
+#include <tinyobj/tiny_obj_loader.h>
 
 // Function to load an OBJ file
 bool LoadObject(const std::string& filePath, std::vector<float>& vertices, std::vector<unsigned int>& indices) {

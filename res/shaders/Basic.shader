@@ -44,8 +44,15 @@ void main() {
     float diff = max(dot(norm, lightDir), 0.0);
     vec3 diffuse = diff * u_LightColor;
 
-    // Combine lighting components
-    vec3 lighting = ambient + diffuse;
+    // Attenuation
+    float distance = length(u_LightPos - v_FragPos);
+    float constant = 1.0;
+    float linear = 0.09;
+    float quadratic = 0.032;
+    float attenuation = 1.0 / (constant + linear * distance + quadratic * (distance * distance));
+
+    // Combine lighting with attenuation
+    vec3 lighting = (ambient + diffuse) * attenuation;
 
     // Apply texture
     vec4 texColor = texture(u_Texture, v_TexCoord);

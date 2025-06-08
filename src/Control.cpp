@@ -22,7 +22,7 @@ static void WindowFocusCallback(GLFWwindow* window, int focused) {
 // Constructor to initialize the Control class with a GLFW window pointer
 Control::Control(GLFWwindow* win, glm::mat4& view) 
 : window(win), view(view) {
-    glfwSetMouseButtonCallback(window, MouseButtonCallback); // Register the mouse button callback
+    glfwSetMouseButtonCallback(window, MouseButtonCallback);   // Register the mouse button callback
     glfwSetWindowFocusCallback(window, WindowFocusCallback);   // Register the window focus callback
 }
 

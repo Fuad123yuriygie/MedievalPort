@@ -57,7 +57,13 @@
         "cstring": "cpp",
         "map": "cpp",
         "set": "cpp",
-        "iomanip": "cpp"
+        "iomanip": "cpp",
+        "any": "cpp",
+        "codecvt": "cpp",
+        "forward_list": "cpp",
+        "ratio": "cpp",
+        "ranges": "cpp",
+        "valarray": "cpp"
     },
     "files.exclude": {
         "**/.vscode": true,

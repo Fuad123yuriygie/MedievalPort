@@ -11,7 +11,7 @@ class ImguiInterface {
     void ImguiNewFrame();
     void ImguiFrameElement(float& rotationX, float& rotationY, float& rotationZ);
     void ImguiRender();
-    private:
     ImGuiIO& io;
+    private:
     ImGuiIO& ImguiIoContext();
 };

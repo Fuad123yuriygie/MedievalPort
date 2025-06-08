@@ -2,23 +2,33 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Launch LifeSimulation",
+            "name": "Launch MedievalPort",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/LifeSimulation.exe",
+            "program": "${workspaceFolder}/build/MedievalPort.exe",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build/",
             "environment": [],
             "externalConsole": false,
             "MIMode": "gdb",
+            "miDebuggerPath": "gdb",
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
                     "text": "-enable-pretty-printing",
-                    "ignoreFailures": false
+                    "ignoreFailures": true
                 }
-            ]
+            ],
+            "preLaunchTask": "build",
+            "targetArchitecture": "x86_64", // Adjust for architecture if needed
+            "logging": {
+                "trace": true,
+                "traceResponse": true,
+                "engineLogging": true,
+                "programOutput": true,
+                "exceptions": true
+            }
         }
     ]
 }
