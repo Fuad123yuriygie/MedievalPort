@@ -1,15 +1,14 @@
 #pragma once
 
-#include <nlohmann/json.hpp>
-#include <iostream>
 #include <fstream>
-#include <vector>
+#include <glm/vec3.hpp>
+#include <iostream>
+#include <nlohmann/json.hpp>
 #include <string>
-#include <glm/vec3.hpp> // Include GLM header for vec3
+#include <vector>
 
 #include "LoadModel.h"
 
-// Alias for JSON library
 using json = nlohmann::json;
 
 class ConfigManager {

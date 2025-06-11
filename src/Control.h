@@ -7,8 +7,8 @@
 // Variables to track mouse movement and camera rotation
 static bool rightMouseButtonPressed = false;
 static double lastMouseX = 0.0, lastMouseY = 0.0;
-static float yaw = -90.0f; // Horizontal rotation (yaw)
-static float pitch = 0.0f; // Vertical rotation (pitch)
+static float yaw = -90.0f;
+static float pitch = 0.0f;
 static float sensitivity = 0.1f; // Mouse sensitivity
 
 // Variables for camera control
@@ -19,18 +19,15 @@ static float cameraSpeed = 2.5f;                   // Camera movement speed (uni
 
 class Control {
 public:
-    GLFWwindow* window; // Pointer to the GLFW window
+    GLFWwindow* window;
     glm::mat4& view;
 
     Control(GLFWwindow* win, glm::mat4& view);
     ~Control() = default;
 
     void UpdateCameraMovement(float deltaTime);
-    
-    private:
-    // Function to process keyboard input for camera movement
+
+private:
     void ProcessKeyboardInput(float deltaTime);
-    
-    // Function to update camera direction based on mouse movement
     void UpdateCameraDirection();
 };

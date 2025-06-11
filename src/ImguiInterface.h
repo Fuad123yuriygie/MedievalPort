@@ -5,13 +5,14 @@
 #include <imgui/imgui_impl_opengl3.h>
 
 class ImguiInterface {
-    public:
+public:
     ImguiInterface(GLFWwindow* window);
     ~ImguiInterface();
     void ImguiNewFrame();
     void ImguiFrameElement(float& rotationX, float& rotationY, float& rotationZ);
     void ImguiRender();
     ImGuiIO& io;
-    private:
+
+private:
     ImGuiIO& ImguiIoContext();
 };

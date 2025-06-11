@@ -2,14 +2,13 @@
 #include <string>
 #include <vector>
 
-#include "LoadModel.h"
-#include "VertexBuffer.h"
-#include "IndexBuffer.h"
-#include "VertexArray.h"
 #include "ConfigManager.h"
+#include "IndexBuffer.h"
+#include "LoadModel.h"
+#include "VertexArray.h"
+#include "VertexBuffer.h"
 
-class FileParser
-{
+class FileParser {
 public:
     FileParser();
     ~FileParser();
@@ -19,7 +18,9 @@ public:
     // Function to load a file and parse its contents
     std::vector<ModelData> objVector;
     std::vector<const char*> modelNames;
+
 private:
-    bool LoadModelFile(const std::string& filePath, std::vector<float>& vertices, std::vector<unsigned int>& indices);
+    bool LoadModelFile(const std::string& filePath, std::vector<float>& vertices,
+                       std::vector<unsigned int>& indices);
     ConfigManager objectConfig;
 };

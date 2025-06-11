@@ -1,8 +1,7 @@
 #include "ImguiInterface.h"
 
 // Initialize ImGui
-ImguiInterface::ImguiInterface(GLFWwindow* window)
-    : io(ImguiIoContext()) {
+ImguiInterface::ImguiInterface(GLFWwindow* window) : io(ImguiIoContext()) {
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -15,8 +14,7 @@ void ImguiInterface::ImguiNewFrame() {
     ImGui::NewFrame();
 }
 
-// Draw ImGui elemnets
-// Make this so that it can take arbitrary number of elements
+// Make this so that it can take arbitrary number of elements (Future Implementation)
 void ImguiInterface::ImguiFrameElement(float& rotationX, float& rotationY, float& rotationZ) {
     ImGui::Begin("Object Rotation");
     ImGui::Text("%.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);

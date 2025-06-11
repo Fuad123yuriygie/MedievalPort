@@ -11,6 +11,7 @@ public:
     VertexBufferLayout& GetLayout();
     void Bind() const;
     void Unbind() const;
+
 private:
     unsigned int m_RendererID;
     VertexBufferLayout layout;

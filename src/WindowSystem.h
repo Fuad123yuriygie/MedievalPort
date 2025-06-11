@@ -1,25 +1,27 @@
 #pragma once
-#include <glad/glad.h>
+
 #include <GLFW/glfw3.h>
+#include <glad/glad.h>
 #include <iostream>
 #include <vector>
 
-#include "Renderer.h"
 #include "FileParser.h"
-#include "VertexBuffer.h"
 #include "IndexBuffer.h"
+#include "Renderer.h"
 #include "VertexArray.h"
+#include "VertexBuffer.h"
 
 #define SCREEN_WIDTH 1280
 #define SCREEN_HEIGHT 720
 
-class WindowSystem
-{
+class WindowSystem {
 public:
     WindowSystem(FileParser& fileParserArg);
     ~WindowSystem();
     GLFWwindow* GetWindow();
-    void SetRenderer(Renderer& rendererArg) { renderer = &rendererArg; }
+    void SetRenderer(Renderer& rendererArg) {
+        renderer = &rendererArg;
+    }
 
     // void Update();
     // void SetWindowSize(int width, int height);
@@ -29,7 +31,7 @@ public:
     // void SetVSync(bool vsync);
     // void SetResizable(bool resizable);
     // void SetIcon(const char* iconPath);
-    private:
+private:
     GLFWwindow* window;
     FileParser& fileParser;
     Renderer* renderer = nullptr;

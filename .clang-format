@@ -1,0 +1,21 @@
+BasedOnStyle: Microsoft
+IndentWidth: 4
+TabWidth: 4
+AccessModifierOffset: -4
+UseTab: Never
+SpaceBeforeParens: Never
+BraceWrapping:
+  AfterFunction: false
+  AfterControlStatement: false
+  AfterClass: false
+  AfterStruct: false
+  AfterEnum: false
+  AfterUnion: false
+  BeforeCatch: false
+  BeforeElse: true
+AlignAfterOpenBracket: Align
+PointerAlignment: Left
+ReferenceAlignment: Left
+AllowAllArgumentsOnNextLine: false
+BinPackArguments: false
+ColumnLimit: 100
