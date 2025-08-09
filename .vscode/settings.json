@@ -63,7 +63,8 @@
         "forward_list": "cpp",
         "ratio": "cpp",
         "ranges": "cpp",
-        "valarray": "cpp"
+        "valarray": "cpp",
+        "chrono": "cpp"
     },
     "files.exclude": {
         "**/.vscode": true,

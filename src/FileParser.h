@@ -4,7 +4,7 @@
 
 #include "ConfigManager.h"
 #include "IndexBuffer.h"
-#include "LoadModel.h"
+#include "LoadData.h"
 #include "VertexArray.h"
 #include "VertexBuffer.h"
 
@@ -20,7 +20,6 @@ public:
     std::vector<const char*> modelNames;
 
 private:
-    bool LoadModelFile(const std::string& filePath, std::vector<float>& vertices,
-                       std::vector<unsigned int>& indices);
+    bool LoadModelFile(const std::string& filePath);
     ConfigManager objectConfig;
 };

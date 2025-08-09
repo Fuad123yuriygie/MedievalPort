@@ -5,21 +5,21 @@ static void MouseButtonCallback(GLFWwindow* window, int button, int action, int 
         if(action == GLFW_PRESS) {
             rightMouseButtonPressed = true;
             glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
         else if(action == GLFW_RELEASE) {
             rightMouseButtonPressed = false;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         }
     }
 }
 
-// Callback to track window focus
 static void WindowFocusCallback(GLFWwindow* window, int focused) {
     if(!focused) {
         rightMouseButtonPressed = false;
     }
 }
 
-// Constructor to initialize the Control class with a GLFW window pointer
 Control::Control(GLFWwindow* win, glm::mat4& view) : window(win), view(view) {
     glfwSetMouseButtonCallback(window, MouseButtonCallback);
     glfwSetWindowFocusCallback(window, WindowFocusCallback);
@@ -29,11 +29,9 @@ void Control::UpdateCameraMovement(float deltaTime) {
     ProcessKeyboardInput(deltaTime);
     UpdateCameraDirection();
 
-    // Update the view matrix based on the camera's position and direction
     view = glm::lookAt(cameraPosition, cameraPosition + cameraFront, cameraUp);
 }
 
-// Function to process keyboard input for camera movement
 void Control::ProcessKeyboardInput(float deltaTime) {
     float velocity = cameraSpeed * deltaTime;
     if(glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
@@ -57,7 +55,6 @@ void Control::ProcessKeyboardInput(float deltaTime) {
     }
 }
 
-// Function to update camera direction based on mouse movement
 void Control::UpdateCameraDirection() {
     if(rightMouseButtonPressed) {
         double mouseX, mouseY;
@@ -72,13 +69,11 @@ void Control::UpdateCameraDirection() {
         yaw += xOffset;
         pitch += yOffset;
 
-        // Constrain pitch to avoid flipping
         if(pitch > 89.0f)
             pitch = 89.0f;
         if(pitch < -89.0f)
             pitch = -89.0f;
 
-        // Calculate the new camera direction
         glm::vec3 front;
         front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
         front.y = sin(glm::radians(pitch));

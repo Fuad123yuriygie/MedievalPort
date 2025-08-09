@@ -12,6 +12,7 @@ void APIENTRY DebugMessage::openglDebugCallback(GLenum source, GLenum type, GLui
                                                 GLenum severity, GLsizei length,
                                                 const GLchar* message, const void* userParam) {
     std::cerr << "OpenGL Debug Message: " << message << std::endl;
+    exit(EXIT_FAILURE);
 }
 
 void DebugMessage::setupDebugCallback() {

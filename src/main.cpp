@@ -1,5 +1,5 @@
-#include <GLFW/glfw3.h>
 #include <glad/glad.h>
+#include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -20,20 +20,18 @@
 #include "FileParser.h"
 #include "ImguiInterface.h"
 #include "IndexBuffer.h"
-#include "LoadModel.h"
+#include "LoadData.h"
 #include "Renderer.h"
 #include "Shader.h"
 #include "VertexArray.h"
 #include "VertexBuffer.h"
 #include "WindowSystem.h"
 
-using namespace std::chrono;
-
 int main() {
     FileParser fileParser;
     WindowSystem windowSystem(fileParser);
     GLFWwindow* window = windowSystem.GetWindow();
-    // Load GLAD
+
     if(!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
@@ -44,71 +42,97 @@ int main() {
     DebugMessage debugMessage;
 #endif
 
-    // Create MVP matrices
     glm::mat4 model = glm::mat4(1.0f);
-    glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -3.0f));
+    glm::vec3 cameraView = glm::vec3(0.0f, 0.0f, -3.0f);
+    glm::mat4 view = glm::translate(glm::mat4(1.0f), cameraView);
     glm::mat4 projection = glm::perspective(glm::radians(45.0f),
                                             (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT,
                                             0.1f,
                                             100.0f);
 
     Renderer renderer(projection);
-
     Control control(window, view);
-
     ImguiInterface imgui(window);
 
     windowSystem.SetRenderer(renderer);
 
-    // Load the OBJ files
     fileParser.LoadSavedFiles();
 
-    // Bind the shader program
-    Shader shader("../res/shaders/Basic.shader");
+    Shader shader("../res/shaders/Basic");
     shader.Bind();
+    Shader skyBoxShader("../res/shaders/SkySphere");
+    skyBoxShader.Bind();
 
-    // Load texture
-    unsigned int texture;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
+    unsigned int cubemapTexture;
+    int cubeWidth, cubeHeight, cubeNrChannels;
+    glGenTextures(1, &cubemapTexture);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
 
-    // Set texture parameters
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // Skybox VAO/VBO setup
+    float skyboxVertices[] = {// positions
+                              -2.0f, 2.0f,  -2.0f, -2.0f, -2.0f, -2.0f, 2.0f,  -2.0f, -2.0f,
+                              2.0f,  -2.0f, -2.0f, 2.0f,  2.0f,  -2.0f, -2.0f, 2.0f,  -2.0f,
 
-    // Load the texture image
-    int width, height, nrChannels;
-    // stbi_set_flip_vertically_on_load(true);
-    unsigned char* data = stbi_load("../res/textures/monkey.png", &width, &height, &nrChannels, 0);
-    std::cout << width << " " << height << " " << nrChannels << std::endl;
-    if(data) {
-        // Determine the format based on the number of channels
-        int channels = (nrChannels == 4) ? GL_RGBA : GL_RGB;
-        glTexImage2D(GL_TEXTURE_2D,
-                     0,
-                     channels,
-                     width,
-                     height,
-                     0,
-                     channels,
-                     GL_UNSIGNED_BYTE,
-                     data);
-        glGenerateMipmap(GL_TEXTURE_2D);
+                              -2.0f, -2.0f, 2.0f,  -2.0f, -2.0f, -2.0f, -2.0f, 2.0f,  -2.0f,
+                              -2.0f, 2.0f,  -2.0f, -2.0f, 2.0f,  2.0f,  -2.0f, -2.0f, 2.0f,
+
+                              2.0f,  -2.0f, -2.0f, 2.0f,  -2.0f, 2.0f,  2.0f,  2.0f,  2.0f,
+                              2.0f,  2.0f,  2.0f,  2.0f,  2.0f,  -2.0f, 2.0f,  -2.0f, -2.0f,
+
+                              -2.0f, -2.0f, 2.0f,  -2.0f, 2.0f,  2.0f,  2.0f,  2.0f,  2.0f,
+                              2.0f,  2.0f,  2.0f,  2.0f,  -2.0f, 2.0f,  -2.0f, -2.0f, 2.0f,
+
+                              -2.0f, 2.0f,  -2.0f, 2.0f,  2.0f,  -2.0f, 2.0f,  2.0f,  2.0f,
+                              2.0f,  2.0f,  2.0f,  -2.0f, 2.0f,  2.0f,  -2.0f, 2.0f,  -2.0f,
+
+                              -2.0f, -2.0f, -2.0f, -2.0f, -2.0f, 2.0f,  2.0f,  -2.0f, -2.0f,
+                              2.0f,  -2.0f, -2.0f, -2.0f, -2.0f, 2.0f,  2.0f,  -2.0f, 2.0f};
+    unsigned int skyboxVAO, skyboxVBO;
+    glGenVertexArrays(1, &skyboxVAO);
+    glGenBuffers(1, &skyboxVBO);
+    glBindVertexArray(skyboxVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, skyboxVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(skyboxVertices), &skyboxVertices, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glBindVertexArray(0);
+
+    std::vector<std::string> faces = {"../res/textures/px.png",  // right
+                                      "../res/textures/nx.png",  // left
+                                      "../res/textures/py.png",  // up
+                                      "../res/textures/ny.png",  // down
+                                      "../res/textures/pz.png",  // back
+                                      "../res/textures/nz.png"}; // front
+
+    for(unsigned int i = 0; i < faces.size(); i++) {
+        unsigned char* data =
+            stbi_load(faces[i].c_str(), &cubeWidth, &cubeHeight, &cubeNrChannels, 0);
+        cubeNrChannels = (cubeNrChannels == 4) ? GL_RGBA : GL_RGB;
+        if(data) {
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i,
+                         0,
+                         cubeNrChannels,
+                         cubeWidth,
+                         cubeHeight,
+                         0,
+                         cubeNrChannels,
+                         GL_UNSIGNED_BYTE,
+                         data);
+            stbi_image_free(data);
+        }
+        else {
+            std::cout << "Cubemap texture failed to load at path: " << faces[i] << std::endl;
+            stbi_image_free(data);
+        }
     }
-    else {
-        std::cout << "Failed to load texture" << std::endl;
-    }
-    stbi_image_free(data);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
 
     float lastFrameTime = 0.0f;
     int selectedModel = 0;
-
-    // Light and camera positions
-    glm::vec3 lightPos(1.2f, 1.0f, 2.0f);
-    shader.SetUniform3f("u_LightPos", lightPos.x, lightPos.y, lightPos.z);
-    shader.SetUniform3f("u_LightColor", 1.0f, 1.0f, 1.0f);
 
     // Render loop
     while(!glfwWindowShouldClose(window)) {
@@ -118,10 +142,8 @@ int main() {
 
         // Process input
         control.UpdateCameraMovement(deltaTime);
-
         renderer.Clear();
-
-        // Start ImGui frame
+        shader.Bind();
         imgui.ImguiNewFrame();
 
         // ImGui window for rotation controls
@@ -151,10 +173,6 @@ int main() {
                               100.0f);
         }
 
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, texture);
-
-        // Render all models with their own transform
         for(auto& modelData : fileParser.objVector) {
             glm::mat4 modelMat = glm::mat4(1.0f);
             modelMat = glm::translate(modelMat, modelData.position);
@@ -167,23 +185,27 @@ int main() {
             modelMat = glm::scale(modelMat, modelData.scale);
 
             glm::mat4 mvp = projection * view * modelMat;
-            glm::mat4 normalMatrix = glm::transpose(glm::inverse(modelMat));
-
-            shader.SetUniformMat4f("u_Model", glm::value_ptr(modelMat));
-            shader.SetUniformMat4f("u_NormalMat", glm::value_ptr(normalMatrix));
             shader.SetUniformMat4f("u_MVP", glm::value_ptr(mvp));
-            // shader.SetUniform1i("u_Texture", 0);
 
-            renderer.Draw(*(modelData.va), *(modelData.ib));
+            renderer.Draw(*(modelData.va), *(modelData.ib), *(modelData.ta));
         }
 
-        // Render ImGui
+        glDepthFunc(GL_LEQUAL);
+        skyBoxShader.Bind();
+        glm::mat4 skyboxView = glm::mat4(glm::mat3(view));
+        skyBoxShader.SetUniformMat4f("u_View", glm::value_ptr(skyboxView));
+        skyBoxShader.SetUniformMat4f("u_Projection", glm::value_ptr(projection));
+        glBindVertexArray(skyboxVAO);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+        glDepthFunc(GL_LESS);
+
         imgui.ImguiRender();
 
         glfwSwapBuffers(window); // Move this to window system (Future note)
         glfwPollEvents();
     }
 
-    glfwTerminate(); // Make seperate function/namespace/class for glfw codes (Future)
     return 0;
 }

@@ -10,7 +10,7 @@ private:
 public:
     VertexArray();
     ~VertexArray();
-    void AddBuffer(const VertexBuffer& vb, const VertexBufferLayout& layout);
+    void AddBuffer(VertexBuffer& vb, std::vector<int>& MaterialIndices);
     void Bind() const;
     void Unbind() const;
 };

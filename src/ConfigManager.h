@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "LoadModel.h"
+#include "LoadData.h"
 
 using json = nlohmann::json;
 
@@ -16,5 +16,5 @@ public:
     ConfigManager();
     ~ConfigManager();
     bool SaveObject(const std::vector<ModelData>& models);
-    std::vector<ModelData> LoadObject();
+    std::vector<ModelData> LoadObjectFromJson();
 };

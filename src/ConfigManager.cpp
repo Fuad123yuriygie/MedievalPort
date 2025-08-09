@@ -29,7 +29,7 @@ bool ConfigManager::SaveObject(const std::vector<ModelData>& models) {
     return false;
 }
 
-std::vector<ModelData> ConfigManager::LoadObject() {
+std::vector<ModelData> ConfigManager::LoadObjectFromJson() {
     std::vector<ModelData> models;
     ModelData model;
     json modelElementConfig;

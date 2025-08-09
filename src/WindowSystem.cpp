@@ -15,7 +15,7 @@ WindowSystem::WindowSystem(FileParser& fileParserArg) : fileParser(fileParserArg
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     // Create windowed mode window and its OpenGL context
-    window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Medieval Port", NULL, NULL);
+    window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "OpenGL", NULL, NULL);
     if(!window) {
         std::cerr << "Failed to create GLFW window" << std::endl;
         glfwTerminate();

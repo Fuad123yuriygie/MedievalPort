@@ -5,6 +5,7 @@ ImguiInterface::ImguiInterface(GLFWwindow* window) : io(ImguiIoContext()) {
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 }
 
 // Draw ImGui new frame

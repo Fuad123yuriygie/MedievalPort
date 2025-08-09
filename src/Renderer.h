@@ -7,12 +7,14 @@
 
 #include "IndexBuffer.h"
 #include "VertexArray.h"
+#include "TextureArray.h"
 
 class Renderer {
 public:
     Renderer(glm::mat4& projectionMatrixArg);
     ~Renderer();
-    void Draw(VertexArray& va, IndexBuffer& ib);
+    void Draw(VertexArray& va, IndexBuffer& ib, TextureArray& ta);
+    void DrawPatches(VertexArray& va, IndexBuffer& ib, TextureArray& ta);
     void UpdateWindowSize(int width, int height);
     void Clear();
 

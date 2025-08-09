@@ -1,15 +1,21 @@
 #pragma once
 
 #include <fstream>
+#include <filesystem>
 #include <glad/glad.h>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 struct ShaderProgramSource {
     std::string VertexSource;
     std::string FragmentSource;
+    std::string TessControlSource;
+    std::string TessEvalSource;
+    std::string GeometrySource;
+    std::string ComputeSource;
 };
 
 class Shader {
@@ -32,6 +38,6 @@ public:
 private:
     ShaderProgramSource ParseShader(const std::string& filePath);
     unsigned int CompileShader(unsigned int type, const std::string& source);
-    unsigned int CreateShader(const std::string& vertexShader, const std::string& fragmentShader);
+    unsigned int CreateShader(const ShaderProgramSource& source);
     int GetUniformLocation(const std::string& name);
 };

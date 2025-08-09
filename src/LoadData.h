@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -8,6 +9,7 @@
 #include <vector>
 
 #include "IndexBuffer.h"
+#include "TextureArray.h"
 #include "VertexArray.h"
 #include "VertexBuffer.h"
 
@@ -16,6 +18,7 @@ struct ModelData {
     VertexArray* va;
     IndexBuffer* ib;
     VertexBuffer* vb;
+    TextureArray* ta;
     std::string filePath;
     glm::vec3 position = glm::vec3(0.0f);
     glm::vec3 rotation = glm::vec3(0.0f);
@@ -23,4 +26,5 @@ struct ModelData {
 };
 
 bool LoadObject(const std::string& filePath, std::vector<float>& vertices,
-                std::vector<unsigned int>& indices);
+                std::vector<unsigned int>& indices, std::vector<std::string>& diffuse_textures,
+                std::vector<int>& materialIndices);

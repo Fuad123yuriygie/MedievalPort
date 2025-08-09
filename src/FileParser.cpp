@@ -18,11 +18,8 @@ FileParser::~FileParser() {
 bool FileParser::ExtractFileData(const std::string& filePath) {
     // Check if the file is an .obj file
     if(filePath.substr(filePath.find_last_of(".") + 1) == "obj") {
-        std::vector<float> vertices;
-        std::vector<unsigned int> indices;
-
         // Load the model file
-        if(LoadModelFile(filePath, vertices, indices)) {
+        if(LoadModelFile(filePath)) {
             return true;
         }
         else {
@@ -38,7 +35,7 @@ bool FileParser::ExtractFileData(const std::string& filePath) {
 }
 
 void FileParser::LoadSavedFiles() {
-    std::vector<ModelData> tempObjVector = objectConfig.LoadObject();
+    std::vector<ModelData> tempObjVector = objectConfig.LoadObjectFromJson();
     for(auto& obj : tempObjVector) {
         if(ExtractFileData(obj.filePath)) {
             objVector.back().position = obj.position;
@@ -48,24 +45,26 @@ void FileParser::LoadSavedFiles() {
     }
 }
 
-bool FileParser::LoadModelFile(const std::string& filePath, std::vector<float>& vertices,
-                               std::vector<unsigned int>& indices) {
-
-    // Load the new .obj file
-    if(LoadObject(filePath.c_str(), vertices, indices)) {
+// Update it so that this can be called independently without initializing an object
+bool FileParser::LoadModelFile(const std::string& filePath) {
+        
+        std::vector<float> vertices;
+        std::vector<unsigned int> indices;
+        std::vector<std::string> diffuseTextures;
+        std::vector<int> materialIndices;
+        // Load the new .obj file
+        if(LoadObject(filePath.c_str(), vertices, indices, diffuseTextures, materialIndices)) {
         std::cout << "Successfully loaded OBJ file: " << filePath << std::endl;
 
         // Update the OpenGL buffers with the new model data
-        VertexArray* va = new VertexArray(); // Declare and initialize the VertexArray object
+        VertexArray* va = new VertexArray();
         VertexBuffer* vb = new VertexBuffer(vertices.data(), vertices.size() * sizeof(float));
-        VertexBufferLayout layout;
-        layout.Push<float>(3); // Position (x, y, z)
-        layout.Push<float>(3); // Normal (nx, ny, nz)
-        layout.Push<float>(2); // Texture coordinates (u, v)
-        va->AddBuffer(*vb, layout);
+
+        TextureArray* ta = new TextureArray(diffuseTextures);
+        va->AddBuffer(*vb, materialIndices); // Fix this MaterialIndices to be passed correctly
 
         IndexBuffer* ib = new IndexBuffer(indices.data(), indices.size());
-        objVector.push_back({va, ib, vb, filePath}); // Store the new model data in the vector
+        objVector.push_back({va, ib, vb, ta, filePath}); // Store the new model data in the vector
         modelNames.push_back(objVector.back().filePath.data());
         std::cout << "Model data updated successfully." << std::endl;
     }
