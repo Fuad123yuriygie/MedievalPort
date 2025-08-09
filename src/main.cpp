@@ -26,6 +26,7 @@
 #include "VertexArray.h"
 #include "VertexBuffer.h"
 #include "WindowSystem.h"
+#include "SkyboxSystem.h"
 
 int main() {
     FileParser fileParser;
@@ -58,79 +59,12 @@ int main() {
 
     fileParser.LoadSavedFiles();
 
+    // Load the shaders from render class (actually the render class should get the shader from model class, that is not yet been impremented)
     Shader shader("../res/shaders/Basic");
     shader.Bind();
-    Shader skyBoxShader("../res/shaders/SkySphere");
-    skyBoxShader.Bind();
 
-    unsigned int cubemapTexture;
-    int cubeWidth, cubeHeight, cubeNrChannels;
-    glGenTextures(1, &cubemapTexture);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
-
-    // Skybox VAO/VBO setup
-    float skyboxVertices[] = {// positions
-                              -2.0f, 2.0f,  -2.0f, -2.0f, -2.0f, -2.0f, 2.0f,  -2.0f, -2.0f,
-                              2.0f,  -2.0f, -2.0f, 2.0f,  2.0f,  -2.0f, -2.0f, 2.0f,  -2.0f,
-
-                              -2.0f, -2.0f, 2.0f,  -2.0f, -2.0f, -2.0f, -2.0f, 2.0f,  -2.0f,
-                              -2.0f, 2.0f,  -2.0f, -2.0f, 2.0f,  2.0f,  -2.0f, -2.0f, 2.0f,
-
-                              2.0f,  -2.0f, -2.0f, 2.0f,  -2.0f, 2.0f,  2.0f,  2.0f,  2.0f,
-                              2.0f,  2.0f,  2.0f,  2.0f,  2.0f,  -2.0f, 2.0f,  -2.0f, -2.0f,
-
-                              -2.0f, -2.0f, 2.0f,  -2.0f, 2.0f,  2.0f,  2.0f,  2.0f,  2.0f,
-                              2.0f,  2.0f,  2.0f,  2.0f,  -2.0f, 2.0f,  -2.0f, -2.0f, 2.0f,
-
-                              -2.0f, 2.0f,  -2.0f, 2.0f,  2.0f,  -2.0f, 2.0f,  2.0f,  2.0f,
-                              2.0f,  2.0f,  2.0f,  -2.0f, 2.0f,  2.0f,  -2.0f, 2.0f,  -2.0f,
-
-                              -2.0f, -2.0f, -2.0f, -2.0f, -2.0f, 2.0f,  2.0f,  -2.0f, -2.0f,
-                              2.0f,  -2.0f, -2.0f, -2.0f, -2.0f, 2.0f,  2.0f,  -2.0f, 2.0f};
-    unsigned int skyboxVAO, skyboxVBO;
-    glGenVertexArrays(1, &skyboxVAO);
-    glGenBuffers(1, &skyboxVBO);
-    glBindVertexArray(skyboxVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, skyboxVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(skyboxVertices), &skyboxVertices, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-    glBindVertexArray(0);
-
-    std::vector<std::string> faces = {"../res/textures/px.png",  // right
-                                      "../res/textures/nx.png",  // left
-                                      "../res/textures/py.png",  // up
-                                      "../res/textures/ny.png",  // down
-                                      "../res/textures/pz.png",  // back
-                                      "../res/textures/nz.png"}; // front
-
-    for(unsigned int i = 0; i < faces.size(); i++) {
-        unsigned char* data =
-            stbi_load(faces[i].c_str(), &cubeWidth, &cubeHeight, &cubeNrChannels, 0);
-        cubeNrChannels = (cubeNrChannels == 4) ? GL_RGBA : GL_RGB;
-        if(data) {
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i,
-                         0,
-                         cubeNrChannels,
-                         cubeWidth,
-                         cubeHeight,
-                         0,
-                         cubeNrChannels,
-                         GL_UNSIGNED_BYTE,
-                         data);
-            stbi_image_free(data);
-        }
-        else {
-            std::cout << "Cubemap texture failed to load at path: " << faces[i] << std::endl;
-            stbi_image_free(data);
-        }
-    }
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-
+    SkyboxSystem skyboxSystem;
+    
     float lastFrameTime = 0.0f;
     int selectedModel = 0;
 
@@ -189,17 +123,8 @@ int main() {
 
             renderer.Draw(*(modelData.va), *(modelData.ib), *(modelData.ta));
         }
-
-        glDepthFunc(GL_LEQUAL);
-        skyBoxShader.Bind();
-        glm::mat4 skyboxView = glm::mat4(glm::mat3(view));
-        skyBoxShader.SetUniformMat4f("u_View", glm::value_ptr(skyboxView));
-        skyBoxShader.SetUniformMat4f("u_Projection", glm::value_ptr(projection));
-        glBindVertexArray(skyboxVAO);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
-        glDrawArrays(GL_TRIANGLES, 0, 36);
-        glDepthFunc(GL_LESS);
+        
+        skyboxSystem.Render(view, projection);
 
         imgui.ImguiRender();
 

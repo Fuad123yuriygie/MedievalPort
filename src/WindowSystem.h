@@ -23,6 +23,14 @@ public:
         renderer = &rendererArg;
     }
 
+    // void Update();
+    // void SetWindowSize(int width, int height);
+    // void SetWindowTitle(const char* title);
+    // void SetWindowPosition(int x, int y);
+    // void SetFullscreen(bool fullscreen);
+    // void SetVSync(bool vsync);
+    // void SetResizable(bool resizable);
+    // void SetIcon(const char* iconPath);
 private:
     GLFWwindow* window;
     FileParser& fileParser;
