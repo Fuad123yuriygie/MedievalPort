@@ -1,6 +1,6 @@
 #include "Renderer.h"
 
-Renderer::Renderer(glm::mat4& projectionMatrixArg) : m_ProjectionMatrix(projectionMatrixArg) {
+Renderer::Renderer() : m_ProjectionMatrix(glm::perspective(glm::radians(45.0f), (float)1280 / (float)720, 0.1f, 100.0f)) {
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
 

@@ -10,16 +10,23 @@
 
 class FileParser {
 public:
-    FileParser();
-    ~FileParser();
+    static FileParser& GetInstance() {
+        static FileParser instance;
+        return instance;
+    }
 
     bool ExtractFileData(const std::string& filePath);
     void LoadSavedFiles();
     // Function to load a file and parse its contents
-    std::vector<ModelData> objVector;
-    std::vector<const char*> modelNames;
+    std::vector<ModelData>& GetObjVector() { return objVector; }
+    std::vector<const char*>& GetModelNames() { return modelNames; }
 
 private:
+    FileParser();
+    ~FileParser();
+
     bool LoadModelFile(const std::string& filePath);
     ConfigManager objectConfig;
+    std::vector<ModelData> objVector;
+    std::vector<const char*> modelNames;
 };

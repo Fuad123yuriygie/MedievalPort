@@ -16,12 +16,12 @@
 
 class WindowSystem {
 public:
-    WindowSystem(FileParser& fileParserArg);
-    ~WindowSystem();
-    GLFWwindow* GetWindow();
-    void SetRenderer(Renderer& rendererArg) {
-        renderer = &rendererArg;
+    static WindowSystem& GetInstance() {
+        static WindowSystem instance;
+        return instance;
     }
+
+    GLFWwindow* GetWindow();
 
     // void Update();
     // void SetWindowSize(int width, int height);
@@ -32,9 +32,9 @@ public:
     // void SetResizable(bool resizable);
     // void SetIcon(const char* iconPath);
 private:
+    WindowSystem();
+    ~WindowSystem();
     GLFWwindow* window;
-    FileParser& fileParser;
-    Renderer* renderer = nullptr;
     static void DropCallback(GLFWwindow* window, int count, const char** paths);
     static void FramebufferSizeCallback(GLFWwindow* window, int width, int height);
 };

@@ -1,11 +1,14 @@
 #include "ImguiInterface.h"
 
 // Initialize ImGui
-ImguiInterface::ImguiInterface(GLFWwindow* window) : io(ImguiIoContext()) {
+ImguiInterface::ImguiInterface() : io(ImguiIoContext()) {
+}
+
+void ImguiInterface::Init(GLFWwindow* window) {
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable; // Docking not available in this ImGui version
 }
 
 // Draw ImGui new frame

@@ -28,6 +28,7 @@ file(GLOB SOURCES
 
 # Specify the directory containing header files
 include_directories(${PROJECT_SOURCE_DIR}/externals/include)
+include_directories(${PROJECT_SOURCE_DIR}/externals/include/imgui)
 
 # Specify the directory containing library files
 link_directories(${PROJECT_SOURCE_DIR}/externals/lib)

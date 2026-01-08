@@ -64,7 +64,12 @@
         "ratio": "cpp",
         "ranges": "cpp",
         "valarray": "cpp",
-        "chrono": "cpp"
+        "chrono": "cpp",
+        "condition_variable": "cpp",
+        "mutex": "cpp",
+        "semaphore": "cpp",
+        "stop_token": "cpp",
+        "thread": "cpp"
     },
     "files.exclude": {
         "**/.vscode": true,

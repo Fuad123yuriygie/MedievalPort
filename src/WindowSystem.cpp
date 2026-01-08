@@ -1,9 +1,7 @@
 #include "WindowSystem.h"
 
-WindowSystem::WindowSystem(FileParser& fileParserArg) : fileParser(fileParserArg) {
-    // Initialize the window system
-    // This could include setting up GLFW, creating a window, etc.
-    // Init library
+// Make window system a singleton
+WindowSystem::WindowSystem() {
     if(!glfwInit()) {
         exit(EXIT_FAILURE);
     }
@@ -25,6 +23,13 @@ WindowSystem::WindowSystem(FileParser& fileParserArg) : fileParser(fileParserArg
     // Make the window's context current
     glfwMakeContextCurrent(window);
     // glfwSwapInterval(1); // Enable vsync
+
+    // Initialize GLAD
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+        std::cerr << "Failed to initialize GLAD" << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    std::cout << glGetString(GL_VERSION) << std::endl;
 
     // Set drop callback and pass 'this' as user pointer
     glfwSetWindowUserPointer(window, this);
@@ -52,7 +57,7 @@ void WindowSystem::DropCallback(GLFWwindow* window, int count, const char** path
         std::string filePath = paths[i];
         std::cout << "Dropped file: " << filePath << std::endl;
 
-        self->fileParser.ExtractFileData(filePath);
+        FileParser::GetInstance().ExtractFileData(filePath);
     }
 }
 
@@ -62,7 +67,6 @@ void WindowSystem::FramebufferSizeCallback(GLFWwindow* window, int width, int he
         return;
 
     glViewport(0, 0, width, height);
-    if(self->renderer) {
-        self->renderer->UpdateWindowSize(width, height);
-    }
+    Renderer::GetInstance().UpdateWindowSize(width, height);
 }
+
