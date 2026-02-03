@@ -1,4 +1,5 @@
 #include "FileParser.h"
+#include "ModelLoaderThread.h"
 
 FileParser::FileParser() {
     // Constructor implementation
@@ -6,12 +7,15 @@ FileParser::FileParser() {
 
 FileParser::~FileParser() {
     // Save last configuration
-    objectConfig.SaveObject(objVector);
-    // Cleanup
-    for(auto& modelData : objVector) {
-        delete modelData.va;
-        delete modelData.ib;
-        delete modelData.vb;
+    {
+        std::lock_guard<std::mutex> lock(objVectorMutex);
+        objectConfig.SaveObject(objVector);
+        // Cleanup
+        for(auto& modelData : objVector) {
+            delete modelData.va;
+            delete modelData.ib;
+            delete modelData.vb;
+        }
     }
 }
 
@@ -38,11 +42,39 @@ void FileParser::LoadSavedFiles() {
     std::vector<ModelData> tempObjVector = objectConfig.LoadObjectFromJson();
     for(auto& obj : tempObjVector) {
         if(ExtractFileData(obj.filePath)) {
+            std::lock_guard<std::mutex> lock(objVectorMutex);
             objVector.back().position = obj.position;
             objVector.back().rotation = obj.rotation;
             objVector.back().scale = obj.scale;
         }
     }
+}
+
+// Refactored to handle pre-loaded data (used by loader thread)
+bool FileParser::LoadModelFileFromData(const std::vector<float>& vertices,
+                                       const std::vector<unsigned int>& indices,
+                                       const std::vector<std::string>& diffuseTextures,
+                                       const std::vector<int>& materialIndices,
+                                       const std::string& filePath) {
+    std::cout << "Creating GPU resources for model: " << filePath << std::endl;
+
+    // Create OpenGL resources (must be done on main thread)
+    VertexArray* va = new VertexArray();
+    VertexBuffer* vb = new VertexBuffer(vertices.data(), vertices.size() * sizeof(float));
+
+    TextureArray* ta = new TextureArray(const_cast<std::vector<std::string>&>(diffuseTextures));
+    va->AddBuffer(*vb, const_cast<std::vector<int>&>(materialIndices));
+
+    IndexBuffer* ib = new IndexBuffer(indices.data(), indices.size());
+    
+    {
+        std::lock_guard<std::mutex> lock(objVectorMutex);
+        objVector.push_back({va, ib, vb, ta, filePath});
+        modelNames.push_back(objVector.back().filePath.data());
+    }
+    
+    std::cout << "Model GPU resources created successfully." << std::endl;
+    return true;
 }
 
 // Update it so that this can be called independently without initializing an object
@@ -56,22 +88,22 @@ bool FileParser::LoadModelFile(const std::string& filePath) {
         if(LoadObject(filePath.c_str(), vertices, indices, diffuseTextures, materialIndices)) {
         std::cout << "Successfully loaded OBJ file: " << filePath << std::endl;
 
-        // Update the OpenGL buffers with the new model data
-        VertexArray* va = new VertexArray();
-        VertexBuffer* vb = new VertexBuffer(vertices.data(), vertices.size() * sizeof(float));
-
-        TextureArray* ta = new TextureArray(diffuseTextures);
-        va->AddBuffer(*vb, materialIndices); // Fix this MaterialIndices to be passed correctly
-
-        IndexBuffer* ib = new IndexBuffer(indices.data(), indices.size());
-        objVector.push_back({va, ib, vb, ta, filePath}); // Store the new model data in the vector
-        modelNames.push_back(objVector.back().filePath.data());
-        std::cout << "Model data updated successfully." << std::endl;
+        return LoadModelFileFromData(vertices, indices, diffuseTextures, materialIndices, filePath);
     }
     else {
         std::cerr << "Failed to load OBJ file: " << filePath << std::endl;
         return false;
     }
+}
 
-    return true;
+// Thread-safe method to add a completed model from the loader thread
+void FileParser::AddModelFromLoader(const PendingModelData& pendingData) {
+    if (pendingData.loadSuccess) {
+        LoadModelFileFromData(pendingData.vertices, pendingData.indices, 
+                             pendingData.diffuseTextures, pendingData.materialIndices,
+                             pendingData.filePath);
+    }
+    else {
+        std::cerr << "Failed to load model from loader thread: " << pendingData.filePath << std::endl;
+    }
 }

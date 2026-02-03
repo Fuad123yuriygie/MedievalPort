@@ -1,4 +1,5 @@
 #include "WindowSystem.h"
+#include "ModelLoaderThread.h"
 
 // Make window system a singleton
 WindowSystem::WindowSystem() {
@@ -55,9 +56,16 @@ void WindowSystem::DropCallback(GLFWwindow* window, int count, const char** path
 
     for(int i = 0; i < count; i++) {
         std::string filePath = paths[i];
-        std::cout << "Dropped file: " << filePath << std::endl;
+        std::cout << "Dropped file, queuing for async load: " << filePath << std::endl;
 
-        FileParser::GetInstance().ExtractFileData(filePath);
+        // Queue the file for asynchronous loading with a callback
+        // The callback will be invoked when loading completes
+        ModelLoaderThread::GetInstance().QueueModelLoad(filePath, 
+            [](const PendingModelData& pendingData) {
+                // This callback happens on the worker thread
+                // Post the model to FileParser to add to the main list
+                FileParser::GetInstance().AddModelFromLoader(pendingData);
+            });
     }
 }
 

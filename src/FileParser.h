@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <mutex>
 
 #include "ConfigManager.h"
 #include "IndexBuffer.h"
@@ -18,15 +19,27 @@ public:
     bool ExtractFileData(const std::string& filePath);
     void LoadSavedFiles();
     // Function to load a file and parse its contents
+    // Note: These return references - caller should hold lock if iterating
     std::vector<ModelData>& GetObjVector() { return objVector; }
     std::vector<const char*>& GetModelNames() { return modelNames; }
+    std::mutex& GetObjVectorMutex() { return objVectorMutex; }
+
+    // Thread-safe method to add a completed model from loader thread
+    void AddModelFromLoader(const class PendingModelData& pendingData);
 
 private:
     FileParser();
     ~FileParser();
 
     bool LoadModelFile(const std::string& filePath);
+    bool LoadModelFileFromData(const std::vector<float>& vertices,
+                               const std::vector<unsigned int>& indices,
+                               const std::vector<std::string>& diffuseTextures,
+                               const std::vector<int>& materialIndices,
+                               const std::string& filePath);
+    
     ConfigManager objectConfig;
     std::vector<ModelData> objVector;
     std::vector<const char*> modelNames;
+    std::mutex objVectorMutex;  // Protect access to objVector and modelNames
 };

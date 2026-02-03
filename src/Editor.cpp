@@ -14,6 +14,10 @@ void Editor::UpdateGUI() {
 
     ImGui::Begin("Model Editor");
     auto& fileParser = FileParser::GetInstance();
+    
+    // Lock the mutex to safely access model data
+    std::lock_guard<std::mutex> lock(fileParser.GetObjVectorMutex());
+    
     if (!fileParser.GetModelNames().empty()) {
         ImGui::Combo("Select Model", &selectedModel, fileParser.GetModelNames().data(), (int)fileParser.GetModelNames().size());
         ImGui::Separator();

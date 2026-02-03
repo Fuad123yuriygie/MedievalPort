@@ -24,15 +24,18 @@ void Application::Run() {
         GraphicsContext::renderer->Clear();
         shader->Bind();
 
-        for (auto& modelData : FileParser::GetInstance().GetObjVector()) {
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), modelData.position);
-            model = glm::rotate(model, glm::radians(modelData.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-            model = glm::rotate(model, glm::radians(modelData.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-            model = glm::rotate(model, glm::radians(modelData.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
-            model = glm::scale(model, modelData.scale);
-            glm::mat4 mvp = GraphicsContext::renderer->GetProjectionMatrix() * view * model;
-            shader->SetUniformMat4f("u_MVP", &mvp[0][0]);
-            GraphicsContext::renderer->Draw(*modelData.va, *modelData.ib, *modelData.ta);
+        {
+            std::lock_guard<std::mutex> lock(FileParser::GetInstance().GetObjVectorMutex());
+            for (auto& modelData : FileParser::GetInstance().GetObjVector()) {
+                glm::mat4 model = glm::translate(glm::mat4(1.0f), modelData.position);
+                model = glm::rotate(model, glm::radians(modelData.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+                model = glm::rotate(model, glm::radians(modelData.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+                model = glm::rotate(model, glm::radians(modelData.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+                model = glm::scale(model, modelData.scale);
+                glm::mat4 mvp = GraphicsContext::renderer->GetProjectionMatrix() * view * model;
+                shader->SetUniformMat4f("u_MVP", &mvp[0][0]);
+                GraphicsContext::renderer->Draw(*modelData.va, *modelData.ib, *modelData.ta);
+            }
         }
 
         glm::mat4 proj = GraphicsContext::renderer->GetProjectionMatrix();

@@ -1,4 +1,5 @@
 #include "ImguiInterface.h"
+#include <GLFW/glfw3.h>
 
 // Initialize ImGui
 ImguiInterface::ImguiInterface() : io(ImguiIoContext()) {
@@ -16,6 +17,19 @@ void ImguiInterface::ImguiNewFrame() {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    
+    // Update ImGui IO with mouse input data
+    ImGuiIO& io = ImGui::GetIO();
+    
+    // Get mouse position
+    double mouseX, mouseY;
+    glfwGetCursorPos(glfwGetCurrentContext(), &mouseX, &mouseY);
+    io.MousePos = ImVec2((float)mouseX, (float)mouseY);
+    
+    // Update mouse button states
+    io.MouseDown[0] = glfwGetMouseButton(glfwGetCurrentContext(), GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    io.MouseDown[1] = glfwGetMouseButton(glfwGetCurrentContext(), GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    io.MouseDown[2] = glfwGetMouseButton(glfwGetCurrentContext(), GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
 }
 
 // Make this so that it can take arbitrary number of elements (Future Implementation)
