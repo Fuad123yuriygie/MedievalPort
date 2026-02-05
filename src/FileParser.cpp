@@ -1,5 +1,6 @@
 #include "FileParser.h"
 #include "ModelLoaderThread.h"
+#include <glm/glm.hpp>
 
 FileParser::FileParser() {
     // Constructor implementation
@@ -40,13 +41,39 @@ bool FileParser::ExtractFileData(const std::string& filePath) {
 
 void FileParser::LoadSavedFiles() {
     std::vector<ModelData> tempObjVector = objectConfig.LoadObjectFromJson();
+    
+    // Queue each model file to load asynchronously
     for(auto& obj : tempObjVector) {
-        if(ExtractFileData(obj.filePath)) {
-            std::lock_guard<std::mutex> lock(objVectorMutex);
-            objVector.back().position = obj.position;
-            objVector.back().rotation = obj.rotation;
-            objVector.back().scale = obj.scale;
-        }
+        // Capture the transform by value so duplicate file paths keep distinct transforms
+        SavedTransform transform{obj.position, obj.rotation, obj.scale};
+        std::string path = obj.filePath;
+
+        // Queue the model to load in background
+        ModelLoaderThread::GetInstance().QueueModelLoad(path,
+            [this, path, transform](const PendingModelData& pendingData) {
+                this->AddModelFromLoaderWithTransform(pendingData, transform);
+            }
+        );
+    }
+}
+
+// Helper function to apply saved transforms to loaded models
+void FileParser::AddModelFromLoaderWithTransform(const PendingModelData& pendingData, 
+                                                  const SavedTransform& transform) {
+    if (pendingData.loadSuccess) {
+        // Queue for GPU resource creation on main thread, don't create GPU resources here
+        std::lock_guard<std::mutex> lock(pendingMutex);
+        pendingGPUModels.push_back({
+            pendingData.vertices,
+            pendingData.indices,
+            pendingData.diffuseTextures,
+            pendingData.materialIndices,
+            pendingData.filePath,
+            transform
+        });
+    }
+    else {
+        std::cerr << "Failed to load model from loader thread: " << pendingData.filePath << std::endl;
     }
 }
 
@@ -106,4 +133,27 @@ void FileParser::AddModelFromLoader(const PendingModelData& pendingData) {
     else {
         std::cerr << "Failed to load model from loader thread: " << pendingData.filePath << std::endl;
     }
+}
+// Process pending models and create GPU resources on main thread
+void FileParser::ProcessPendingModels() {
+    std::lock_guard<std::mutex> lock(pendingMutex);
+    
+    for (auto& pending : pendingGPUModels) {
+        // Now safe to create GPU resources on main thread
+        LoadModelFileFromData(pending.vertices, pending.indices, 
+                             pending.diffuseTextures, pending.materialIndices,
+                             pending.filePath);
+        
+        // Apply the saved transform to the loaded model
+        {
+            std::lock_guard<std::mutex> objLock(objVectorMutex);
+            if (!objVector.empty()) {
+                objVector.back().position = pending.transform.position;
+                objVector.back().rotation = pending.transform.rotation;
+                objVector.back().scale = pending.transform.scale;
+            }
+        }
+    }
+    
+    pendingGPUModels.clear();
 }

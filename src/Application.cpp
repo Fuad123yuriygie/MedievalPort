@@ -14,19 +14,31 @@ Application::Application() {
 
 void Application::Run() {
     float lastFrameTime = 0.0f;
+    bool debugPrinted = false;
     while (!glfwWindowShouldClose(window)) {
         float currentFrameTime = (float)glfwGetTime();
         float deltaTime = currentFrameTime - lastFrameTime;
         lastFrameTime = currentFrameTime;
 
         control->UpdateCameraMovement(deltaTime);
+        
+        // Process any pending GPU resource creation from loader threads
+        FileParser::GetInstance().ProcessPendingModels();
+        
         UpdateGUI();
         GraphicsContext::renderer->Clear();
         shader->Bind();
 
         {
             std::lock_guard<std::mutex> lock(FileParser::GetInstance().GetObjVectorMutex());
-            for (auto& modelData : FileParser::GetInstance().GetObjVector()) {
+            auto& objVector = FileParser::GetInstance().GetObjVector();
+            
+            if (!debugPrinted) {
+                std::cout << "Number of models loaded: " << objVector.size() << std::endl;
+                debugPrinted = true;
+            }
+            
+            for (auto& modelData : objVector) {
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), modelData.position);
                 model = glm::rotate(model, glm::radians(modelData.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
                 model = glm::rotate(model, glm::radians(modelData.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));

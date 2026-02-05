@@ -12,6 +12,8 @@ Editor::Editor() {
 void Editor::UpdateGUI() {
     GraphicsContext::gui->NewFrame();
 
+    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(350, 500), ImGuiCond_FirstUseEver);
     ImGui::Begin("Model Editor");
     auto& fileParser = FileParser::GetInstance();
     
