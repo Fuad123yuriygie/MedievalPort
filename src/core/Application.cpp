@@ -55,6 +55,7 @@ void Application::Run() {
         RenderGUI();
         glfwSwapBuffers(window);
         glfwPollEvents();
+        glfwSwapInterval(0);
     }
 }
 

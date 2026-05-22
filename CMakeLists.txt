@@ -18,9 +18,11 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -O0") # Enable debug symbols
 endif()
 
-# Source files
-file(GLOB SOURCES
+# Source files (recursively collect sources/headers)
+file(GLOB_RECURSE SOURCES
     "${PROJECT_SOURCE_DIR}/src/*.h"
+    "${PROJECT_SOURCE_DIR}/src/*.hpp"
+    "${PROJECT_SOURCE_DIR}/src/*.c"
     "${PROJECT_SOURCE_DIR}/src/*.cpp"
     "${PROJECT_SOURCE_DIR}/externals/src/*.c"
     "${PROJECT_SOURCE_DIR}/externals/src/*.cpp"
@@ -29,6 +31,15 @@ file(GLOB SOURCES
 # Specify the directory containing header files
 include_directories(${PROJECT_SOURCE_DIR}/externals/include)
 include_directories(${PROJECT_SOURCE_DIR}/externals/include/imgui)
+
+# Add all immediate subdirectories of src to include paths so existing
+# includes that reference headers by basename continue to work.
+file(GLOB SRC_SUBDIRS RELATIVE ${PROJECT_SOURCE_DIR} "${PROJECT_SOURCE_DIR}/src/*")
+foreach(subdir ${SRC_SUBDIRS})
+    if(IS_DIRECTORY "${PROJECT_SOURCE_DIR}/${subdir}")
+        include_directories("${PROJECT_SOURCE_DIR}/${subdir}")
+    endif()
+endforeach()
 
 # Specify the directory containing library files
 link_directories(${PROJECT_SOURCE_DIR}/externals/lib)

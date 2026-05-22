@@ -1,2 +1,5 @@
 # Ignore build output
 build/
+
+# Ignore model files
+res/models/
