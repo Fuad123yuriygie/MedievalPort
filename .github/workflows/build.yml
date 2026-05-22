@@ -1,0 +1,40 @@
+name: Build on push
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 and MinGW tools
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: |
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-make
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build project
+        shell: bash
+        run: |
+          cmake --build build --config Release -- -j$(nproc)
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: medievalport-build
+          path: build
