@@ -1,18 +1,27 @@
 #pragma once
 
-#include <glad/glad.h>
+#include "graphics/GlObject.h"
+
+#include <cstdint>
+#include <span>
 
 class IndexBuffer {
-private:
-    unsigned int m_RendererID;
-    unsigned int m_Count;
-
 public:
-    IndexBuffer(const unsigned int* data, unsigned int count);
-    ~IndexBuffer();
-    void Bind() const;
-    void Unbind() const;
-    inline unsigned int GetCount() const {
-        return m_Count;
+    IndexBuffer(const GraphicsContext& context, std::span<const std::uint32_t> indices);
+    ~IndexBuffer() = default;
+    IndexBuffer(const IndexBuffer&) = delete;
+    IndexBuffer& operator=(const IndexBuffer&) = delete;
+    IndexBuffer(IndexBuffer&&) noexcept = default;
+    IndexBuffer& operator=(IndexBuffer&&) noexcept = default;
+
+    unsigned GetId() const {
+        return object.GetId();
     }
+    std::uint32_t GetCount() const {
+        return count;
+    }
+
+private:
+    GlObject object;
+    std::uint32_t count = 0;
 };

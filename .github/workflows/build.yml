@@ -1,40 +1,29 @@
-name: Build on push
+name: Build And Test
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
+  pull_request: {}
 
 jobs:
   build:
-    runs-on: windows-latest
-
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup MSYS2 and MinGW tools
-        uses: msys2/setup-msys2@v2
-        with:
-          update: true
-          install: |
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-make
-
-      - name: Configure CMake
-        shell: bash
-        run: |
-          cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build project
-        shell: bash
-        run: |
-          cmake --build build --config Release -- -j$(nproc)
-
+      - uses: actions/checkout@v4
+      - name: Install Linux graphics dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMEDIEVALPORT_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+      - name: Test CPU systems
+        run: ctest --test-dir build -C Release --output-on-failure --no-tests=error
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: medievalport-build
+          name: medievalport-build-${{ runner.os }}
           path: build

@@ -1,60 +1,68 @@
 #pragma once
 
+#include <algorithm>
 #include <glad/glad.h>
+#include <limits>
+#include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 struct VertexBufferElement {
-    unsigned int type;
-    unsigned int count;
+    unsigned location;
+    unsigned type;
+    unsigned count;
     unsigned char normalized;
+    unsigned offset;
 
-    static unsigned int GetSizeOfType(unsigned int type) {
+    static constexpr unsigned GetSizeOfType(unsigned type) {
         switch(type) {
         case GL_FLOAT:
-            return 4;
+            return sizeof(float);
+        case GL_INT:
+            return sizeof(int);
         case GL_UNSIGNED_INT:
-            return 4;
+            return sizeof(unsigned);
         case GL_UNSIGNED_BYTE:
-            return 1;
+            return sizeof(unsigned char);
+        default:
+            throw std::invalid_argument("Unsupported vertex element type");
         }
-        return 0;
     }
 };
 
 class VertexBufferLayout {
-private:
-    std::vector<VertexBufferElement> m_Elements;
-    unsigned int m_Stride;
-
 public:
-    VertexBufferLayout() : m_Stride(0) {
+    template <typename T> void Push(unsigned location, unsigned count) {
+        static_assert(std::is_same_v<T, float> || std::is_same_v<T, unsigned> ||
+                          std::is_same_v<T, int> || std::is_same_v<T, unsigned char>,
+                      "Unsupported vertex attribute type");
+        if(count == 0 || count > 4 ||
+           std::any_of(elements.begin(), elements.end(), [location](const auto& element) {
+               return element.location == location;
+           })) {
+            throw std::invalid_argument("Invalid vertex attribute count or duplicate location");
+        }
+        constexpr unsigned type = std::is_same_v<T, float>      ? GL_FLOAT
+                                  : std::is_same_v<T, unsigned> ? GL_UNSIGNED_INT
+                                  : std::is_same_v<T, int>      ? GL_INT
+                                                                : GL_UNSIGNED_BYTE;
+        constexpr unsigned char normalized = std::is_same_v<T, unsigned char> ? GL_TRUE : GL_FALSE;
+        const unsigned size = count * VertexBufferElement::GetSizeOfType(type);
+        if(stride > std::numeric_limits<unsigned>::max() - size) {
+            throw std::overflow_error("Vertex stride overflow");
+        }
+        elements.push_back({location, type, count, normalized, stride});
+        stride += size;
     }
 
-    template <typename T> void Push(unsigned int count) {
-        static_assert(false);
+    const std::vector<VertexBufferElement>& GetElements() const {
+        return elements;
+    }
+    unsigned GetStride() const {
+        return stride;
     }
 
-    inline const std::vector<VertexBufferElement> GetElements() const {
-        return m_Elements;
-    }
-    inline unsigned int GetStride() const {
-        return m_Stride;
-    }
+private:
+    std::vector<VertexBufferElement> elements;
+    unsigned stride = 0;
 };
-
-// Explicit specialization of Push<float> outside the class definition
-
-template <> inline void VertexBufferLayout::Push<float>(unsigned int count) {
-    m_Elements.push_back({GL_FLOAT, count, GL_FALSE});
-    m_Stride += count * VertexBufferElement::GetSizeOfType(GL_FLOAT);
-}
-
-template <> inline void VertexBufferLayout::Push<unsigned int>(unsigned int count) {
-    m_Elements.push_back({GL_UNSIGNED_INT, count, GL_FALSE});
-    m_Stride += count * VertexBufferElement::GetSizeOfType(GL_UNSIGNED_INT);
-}
-
-template <> inline void VertexBufferLayout::Push<unsigned char>(unsigned int count) {
-    m_Elements.push_back({GL_UNSIGNED_BYTE, count, GL_TRUE});
-    m_Stride += count * VertexBufferElement::GetSizeOfType(GL_UNSIGNED_BYTE);
-}

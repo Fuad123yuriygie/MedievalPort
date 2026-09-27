@@ -23,9 +23,9 @@ MedievalPort is a C++ OpenGL application for loading, displaying, and manipulati
 
 ### Prerequisites
 
-- C++17 or later
-- CMake
-- OpenGL 3.3+
+- A C++20 compiler (MSVC, GCC, or Clang)
+- CMake 3.24 or later
+- An OpenGL 4.5 core-capable driver
 - [GLFW](https://www.glfw.org/)
 - [GLAD](https://glad.dav1d.de/)
 - [ImGui](https://github.com/ocornut/imgui)
@@ -42,21 +42,46 @@ MedievalPort is a C++ OpenGL application for loading, displaying, and manipulati
     ```
 2. Configure and build with CMake:
     ```sh
-    mkdir build
-    cd build
-    cmake ..
-    cmake --build .
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build --config Debug
     ```
 3. Run the executable:
     ```sh
-    ./MedievalPort
+    ./build/MedievalPort
     ```
+
+For Visual Studio generators, the executable is `build/Debug/MedievalPort.exe`. CMake uses an
+installed GLFW 3.4 package, the bundled x64 MinGW library, or fetches GLFW 3.4 sources for the
+selected compiler. Source fetching requires Git and network access. Linux source builds require
+OpenGL and X11 development packages; the optional Wayland backend can be enabled with
+`-DGLFW_BUILD_WAYLAND=ON`. The native macOS OpenGL 4.1 implementation is not supported.
+
+Shaders and skybox textures are copied into `res` beside the executable on each build. Asset
+lookup does not depend on the working directory.
 
 ### Usage
 
 - **Drag and drop** `.obj` files into the window to load models.
 - Use the **ImGui panel** to select and transform models.
 - The application automatically saves your scene configuration on exit and restores it on startup.
+- Scene files default to `model_config.json` beside the executable. Use `--scene path/to/model_config.json`
+  to open an existing scene saved elsewhere; relative model paths are resolved against that scene's directory.
+- Use `--assets path/to/res` to override the asset root and `--load path/to/model.obj` to queue a model at startup.
+- Vsync is enabled by default. `--no-vsync` enables uncapped profiling; `--hidden --frames 5` runs a bounded smoke test.
+- OBJ parsing, image decoding, and resizing run on a worker. The context thread uploads at most one
+  completed model per frame, shares fixed-size texture-array pages, and culls offscreen bounds.
+
+### Tests
+
+```sh
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+CPU tests cover OBJ validation/indexing, material fallbacks, image decode/resize, persistence,
+worker shutdown, camera math, and frustum bounds. They can be built without graphics dependencies
+using `-DMEDIEVALPORT_BUILD_APP=OFF`. Enable live OpenGL ownership/rendering/drop-path tests with
+`-DMEDIEVALPORT_ENABLE_GL_TESTS=ON`; these require a desktop driver capable of creating a 4.5 core context.
+`-DMEDIEVALPORT_WARNINGS_AS_ERRORS=ON` enables the same strict project warning policy used by CI.
 
 ## Project Structure
 

@@ -1,83 +1,51 @@
-#include "Control.h"
+#include "core/Control.h"
 
-static void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-    if(button == GLFW_MOUSE_BUTTON_RIGHT) {
-        if(action == GLFW_PRESS) {
-            rightMouseButtonPressed = true;
-            glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-        }
-        else if(action == GLFW_RELEASE) {
-            rightMouseButtonPressed = false;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        }
+#include "core/Camera.h"
+
+#include <GLFW/glfw3.h>
+#include <stdexcept>
+
+Control::Control(GLFWwindow* window) : window(window) {
+    if(!window) {
+        throw std::invalid_argument("Camera input requires a window");
     }
 }
 
-static void WindowFocusCallback(GLFWwindow* window, int focused) {
-    if(!focused) {
-        rightMouseButtonPressed = false;
+Control::~Control() {
+    if(dragging) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
 }
 
-Control::Control(GLFWwindow* win, glm::mat4& view) : window(win), view(view) {
-    glfwSetMouseButtonCallback(window, MouseButtonCallback);
-    glfwSetWindowFocusCallback(window, WindowFocusCallback);
+InputState Control::PollInput() const {
+    InputState input;
+    input.focused = glfwGetWindowAttrib(window, GLFW_FOCUSED) != 0;
+    input.rightMouseDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    glfwGetCursorPos(window, &input.mouseX, &input.mouseY);
+    const auto down = [this](int key) {
+        return glfwGetKey(window, key) == GLFW_PRESS ? 1.0f : 0.0f;
+    };
+    input.movement = {down(GLFW_KEY_D) - down(GLFW_KEY_A),
+                      down(GLFW_KEY_E) - down(GLFW_KEY_Q),
+                      down(GLFW_KEY_W) - down(GLFW_KEY_S)};
+    return input;
 }
 
-void Control::UpdateCameraMovement(float deltaTime) {
-    ProcessKeyboardInput(deltaTime);
-    UpdateCameraDirection();
-
-    view = glm::lookAt(cameraPosition, cameraPosition + cameraFront, cameraUp);
-}
-
-void Control::ProcessKeyboardInput(float deltaTime) {
-    float velocity = cameraSpeed * deltaTime;
-    if(glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-        cameraPosition += velocity * cameraFront;
+void Control::Update(Camera& camera, float deltaSeconds, bool captureMouse, bool captureKeyboard) {
+    const InputState input = PollInput();
+    const bool shouldDrag = input.focused && input.rightMouseDown && (dragging || !captureMouse);
+    if(shouldDrag != dragging) {
+        dragging = shouldDrag;
+        glfwSetInputMode(window, GLFW_CURSOR, dragging ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+        glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
     }
-    if(glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-        cameraPosition -= velocity * cameraFront;
+    else if(dragging) {
+        camera.Look(static_cast<float>(input.mouseX - lastMouseX),
+                    static_cast<float>(lastMouseY - input.mouseY));
+        lastMouseX = input.mouseX;
+        lastMouseY = input.mouseY;
     }
-    if(glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-        cameraPosition -= glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
-    }
-    if(glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-        cameraPosition +=
-            glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
-    }
-    if(glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) {
-        cameraPosition += cameraUp * velocity;
-    }
-    if(glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) {
-        cameraPosition -= cameraUp * velocity;
-    }
-}
-
-void Control::UpdateCameraDirection() {
-    if(rightMouseButtonPressed) {
-        double mouseX, mouseY;
-        glfwGetCursorPos(window, &mouseX, &mouseY);
-
-        float xOffset = (float)(mouseX - lastMouseX) * sensitivity;
-        float yOffset = (float)(lastMouseY - mouseY) * sensitivity;
-
-        lastMouseX = mouseX;
-        lastMouseY = mouseY;
-
-        yaw += xOffset;
-        pitch += yOffset;
-
-        if(pitch > 89.0f)
-            pitch = 89.0f;
-        if(pitch < -89.0f)
-            pitch = -89.0f;
-
-        glm::vec3 front;
-        front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-        front.y = sin(glm::radians(pitch));
-        front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
-        cameraFront = glm::normalize(front);
+    if(input.focused && !captureKeyboard) {
+        camera.Move(input.movement, deltaSeconds);
     }
 }

@@ -1,27 +1,29 @@
 #pragma once
 
-#include <glm/ext/matrix_float4x4.hpp>
-#include <ranges>
-#include <glm/gtc/type_ptr.hpp>
+#include "core/Settings.h"
+#include "graphics/GlObject.h"
+#include "graphics/Shader.h"
+#include "graphics/VertexArray.h"
+#include "graphics/VertexBuffer.h"
 
-#include "Shader.h"
+#include <filesystem>
+#include <glm/mat4x4.hpp>
 
 class SkyboxSystem {
 public:
-    SkyboxSystem();
-    ~SkyboxSystem();
+    SkyboxSystem(const GraphicsContext& context, const std::filesystem::path& assetRoot,
+                 int textureSize = ImportSettings::defaultTextureSize);
+    ~SkyboxSystem() = default;
+    SkyboxSystem(const SkyboxSystem&) = delete;
+    SkyboxSystem& operator=(const SkyboxSystem&) = delete;
 
-    void Update(float deltaTime);
-    void Render(glm::mat4& view, glm::mat4& projection);
+    void Render(const glm::mat4& view, const glm::mat4& projection) const;
 
 private:
-    unsigned int cubemapTexture;
-    unsigned int skyboxVAO;
-    unsigned int skyboxVBO;
-    Shader skyboxShader;
-
-    void Initialize();
-    void LoadCubemapTextures();
-    void SetupSkyboxGeometry();
-    void BindSkyboxTextures();
+    Shader shader;
+    VertexBuffer vertexBuffer;
+    VertexArray vertexArray;
+    GlObject cubemap;
+    int viewLocation = -1;
+    int projectionLocation = -1;
 };

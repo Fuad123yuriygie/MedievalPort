@@ -1,80 +1,126 @@
-#include "WindowSystem.h"
-#include "ModelLoaderThread.h"
+#include "window/WindowSystem.h"
 
-// Make window system a singleton
-WindowSystem::WindowSystem() {
+#include "graphics/GraphicsContext.h"
+#include "io/PathUtils.h"
+#include "utils/DebugMessage.h"
+#include "utils/Log.h"
+
+#include <GLFW/glfw3.h>
+#include <glad/glad.h>
+#include <stdexcept>
+#include <string>
+
+WindowSystem::WindowSystem(const RenderSettings& settings) {
+    if(settings.width <= 0 || settings.height <= 0 || settings.samples < 0) {
+        throw std::invalid_argument("Invalid window dimensions or MSAA sample count");
+    }
+    glfwSetErrorCallback(ErrorCallback);
     if(!glfwInit()) {
-        exit(EXIT_FAILURE);
+        throw std::runtime_error("Failed to initialize GLFW");
     }
 
-    // Request an OpenGL debug context
-    glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
+    try {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+#ifndef NDEBUG
+        glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
+#endif
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+        glfwWindowHint(GLFW_VISIBLE, settings.visible ? GLFW_TRUE : GLFW_FALSE);
+        glfwWindowHint(GLFW_SAMPLES, settings.samples);
+        window =
+            glfwCreateWindow(settings.width, settings.height, "MedievalPort", nullptr, nullptr);
+        if(!window) {
+            throw std::runtime_error("An OpenGL 4.5 core context is required");
+        }
+        glfwMakeContextCurrent(window);
+        if(!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
+            throw std::runtime_error("Failed to initialize GLAD");
+        }
 
-    // Make window resizable
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-
-    // Create windowed mode window and its OpenGL context
-    window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "OpenGL", NULL, NULL);
-    if(!window) {
-        std::cerr << "Failed to create GLFW window" << std::endl;
+        GLint profile = 0;
+        glGetIntegerv(GL_CONTEXT_PROFILE_MASK, &profile);
+        if(!GLAD_GL_VERSION_4_5 || (profile & GL_CONTEXT_CORE_PROFILE_BIT) == 0) {
+            throw std::runtime_error("The driver did not provide OpenGL 4.5 core");
+        }
+        context = std::make_unique<GraphicsContext>(window);
+        InstallDebugOutput(*context);
+        Log(LogLevel::Info, reinterpret_cast<const char*>(glGetString(GL_VERSION)));
+        glfwSwapInterval(settings.vsync ? 1 : 0);
+        glfwSetWindowUserPointer(window, this);
+        glfwSetDropCallback(window, DropCallback);
+    } catch(...) {
+        context.reset();
+        if(window) {
+            glfwDestroyWindow(window);
+            window = nullptr;
+        }
         glfwTerminate();
-        exit(EXIT_FAILURE);
+        throw;
     }
-
-    // Make the window's context current
-    glfwMakeContextCurrent(window);
-    // glfwSwapInterval(1); // Enable vsync
-
-    // Initialize GLAD
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-        std::cerr << "Failed to initialize GLAD" << std::endl;
-        exit(EXIT_FAILURE);
-    }
-    std::cout << glGetString(GL_VERSION) << std::endl;
-
-    // Set drop callback and pass 'this' as user pointer
-    glfwSetWindowUserPointer(window, this);
-    glfwSetDropCallback(window, DropCallback);
-
-    glfwSetFramebufferSizeCallback(window, FramebufferSizeCallback);
 }
 
 WindowSystem::~WindowSystem() {
-    // Cleanup code
+    context->AssertCurrent();
+    glDebugMessageCallback(nullptr, nullptr);
+    context.reset();
     glfwDestroyWindow(window);
     glfwTerminate();
 }
 
-GLFWwindow* WindowSystem::GetWindow() {
-    return window;
+const GraphicsContext& WindowSystem::GetContext() const {
+    return *context;
 }
 
-void WindowSystem::DropCallback(GLFWwindow* window, int count, const char** paths) {
-    WindowSystem* self = static_cast<WindowSystem*>(glfwGetWindowUserPointer(window));
-    if(!self)
-        return;
+std::pair<int, int> WindowSystem::GetFramebufferSize() const {
+    int width = 0;
+    int height = 0;
+    glfwGetFramebufferSize(window, &width, &height);
+    return {width, height};
+}
 
-    for(int i = 0; i < count; i++) {
-        std::string filePath = paths[i];
-        std::cout << "Dropped file, queuing for async load: " << filePath << std::endl;
+std::vector<std::filesystem::path> WindowSystem::TakeDroppedFiles() {
+    std::vector<std::filesystem::path> events;
+    events.swap(droppedFiles);
+    return events;
+}
 
-        // Queue the file for asynchronous loading with a callback
-        // The callback will be invoked when loading completes
-        ModelLoaderThread::GetInstance().QueueModelLoad(filePath, 
-            [](const PendingModelData& pendingData) {
-                // This callback happens on the worker thread
-                // Post the model to FileParser to add to the main list
-                FileParser::GetInstance().AddModelFromLoader(pendingData);
-            });
+bool WindowSystem::ShouldClose() const {
+    return glfwWindowShouldClose(window) != 0;
+}
+
+void WindowSystem::PollEvents() const {
+    glfwPollEvents();
+}
+
+void WindowSystem::WaitForEvents(double timeoutSeconds) const {
+    glfwWaitEventsTimeout(timeoutSeconds);
+}
+
+void WindowSystem::Present() const {
+    glfwSwapBuffers(window);
+}
+
+void WindowSystem::DropCallback(GLFWwindow* window, int count, const char** paths) noexcept {
+    try {
+        auto* self = static_cast<WindowSystem*>(glfwGetWindowUserPointer(window));
+        if(self) {
+            for(int index = 0; index < count; ++index) {
+                self->droppedFiles.push_back(PathFromUtf8(paths[index]));
+            }
+        }
+    } catch(...) {
+        Log(LogLevel::Error, "Could not enqueue dropped files");
     }
 }
 
-void WindowSystem::FramebufferSizeCallback(GLFWwindow* window, int width, int height) {
-    WindowSystem* self = static_cast<WindowSystem*>(glfwGetWindowUserPointer(window));
-    if(!self)
-        return;
-
-    glViewport(0, 0, width, height);
-    Renderer::GetInstance().UpdateWindowSize(width, height);
+void WindowSystem::ErrorCallback(int code, const char* description) noexcept {
+    try {
+        Log(LogLevel::Error,
+            "GLFW " + std::to_string(code) + ": " + (description ? description : "unknown error"));
+    } catch(...) {
+        Log(LogLevel::Error, "GLFW error (message unavailable)");
+    }
 }
-

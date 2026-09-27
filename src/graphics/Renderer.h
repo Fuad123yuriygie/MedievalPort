@@ -1,30 +1,49 @@
 #pragma once
 
-#include <glad/glad.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <iostream>
+#include "core/Settings.h"
 
-#include "IndexBuffer.h"
-#include "VertexArray.h"
-#include "TextureArray.h"
-#include "IRenderer.h"
+#include <cstdint>
+#include <filesystem>
+#include <glm/mat4x4.hpp>
+#include <memory>
+#include <span>
 
-class Renderer : public IRenderer {
+class GraphicsContext;
+class Shader;
+class SkyboxSystem;
+class TextureArray;
+class VertexArray;
+
+// Frame-scoped, immutable views. The scene cannot be edited during submission.
+struct DrawItem {
+    const VertexArray* vertexArray = nullptr;
+    const TextureArray* textureArray = nullptr;
+    glm::mat4 modelViewProjection{1.0f};
+    std::uint32_t firstIndex = 0;
+    std::uint32_t indexCount = 0;
+    std::uint32_t textureLayer = 0;
+    bool mirrored = false;
+};
+
+class Renderer {
 public:
-    static Renderer& GetInstance() {
-        static Renderer instance;
-        return instance;
-    }
+    Renderer(const GraphicsContext& context, const std::filesystem::path& assetRoot,
+             const RenderSettings& settings = {});
+    ~Renderer();
+    Renderer(const Renderer&) = delete;
+    Renderer& operator=(const Renderer&) = delete;
 
-    void Draw(VertexArray& va, IndexBuffer& ib, TextureArray& ta);
-    void DrawPatches(VertexArray& va, IndexBuffer& ib, TextureArray& ta);
-    void UpdateWindowSize(int width, int height);
-    void Clear();
-    const glm::mat4& GetProjectionMatrix() const { return m_ProjectionMatrix; }
+    void BeginScene(int width, int height) const;
+    void DrawScene(std::span<const DrawItem> draws) const;
+    void DrawSkybox(const glm::mat4& view, const glm::mat4& projection) const;
+    void BeginUI() const;
+    void Shutdown() noexcept;
 
 private:
-    Renderer();
-    ~Renderer();
-    glm::mat4 m_ProjectionMatrix;
+    const GraphicsContext& context;
+    RenderSettings settings;
+    std::unique_ptr<Shader> shader;
+    std::unique_ptr<SkyboxSystem> skybox;
+    int mvpLocation = -1;
+    int layerLocation = -1;
 };

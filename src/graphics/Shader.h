@@ -1,43 +1,42 @@
 #pragma once
 
-#include <fstream>
-#include <filesystem>
-#include <glad/glad.h>
-#include <iostream>
-#include <sstream>
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include "graphics/GlObject.h"
 
-struct ShaderProgramSource {
-    std::string VertexSource;
-    std::string FragmentSource;
-    std::string TessControlSource;
-    std::string TessEvalSource;
-    std::string GeometrySource;
-    std::string ComputeSource;
-};
+#include <filesystem>
+#include <functional>
+#include <glm/mat4x4.hpp>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 
 class Shader {
-private:
-    std::string m_FilePath;
-    unsigned int m_RendererID;
-    std::unordered_map<std::string, int> m_UniformLocationCache;
-
 public:
-    Shader(const std::string& filePath);
-    ~Shader();
+    explicit Shader(const GraphicsContext& context, const std::filesystem::path& shaderDirectory);
+    ~Shader() = default;
+    Shader(const Shader&) = delete;
+    Shader& operator=(const Shader&) = delete;
+    Shader(Shader&&) noexcept = default;
+    Shader& operator=(Shader&&) noexcept = default;
 
     void Bind() const;
-    void Unbind() const;
-    void SetUniform4f(const std::string& name, float v0, float v1, float v2, float v3);
-    void SetUniform3f(const std::string& name, float v0, float v1, float v2);
-    void SetUniformMat4f(const std::string& name, const float* matrix);
-    void SetUniform1i(const std::string& name, int value);
+    unsigned GetId() const {
+        return program.GetId();
+    }
+    int GetUniformLocation(std::string_view name) const;
+    void SetUniformMat4f(int location, const glm::mat4& matrix) const;
+    void SetUniform1i(int location, int value) const;
+    void SetUniformMat4f(std::string_view name, const glm::mat4& matrix) const;
+    void SetUniform1i(std::string_view name, int value) const;
 
 private:
-    ShaderProgramSource ParseShader(const std::string& filePath);
-    unsigned int CompileShader(unsigned int type, const std::string& source);
-    unsigned int CreateShader(const ShaderProgramSource& source);
-    int GetUniformLocation(const std::string& name);
+    struct UniformHash {
+        using is_transparent = void;
+        std::size_t operator()(std::string_view value) const noexcept {
+            return std::hash<std::string_view>{}(value);
+        }
+    };
+
+    GlObject program;
+    // Uniform discovery is logically const; hot paths retain the resolved integer locations.
+    mutable std::unordered_map<std::string, int, UniformHash, std::equal_to<>> uniformLocations;
 };

@@ -1,30 +1,58 @@
 #pragma once
 
-#include <filesystem>
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <iostream>
+#include "core/Settings.h"
+#include "io/ImageData.h"
+
+#include <cstdint>
+#include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 #include <string>
 #include <vector>
 
-#include "IndexBuffer.h"
-#include "TextureArray.h"
-#include "VertexArray.h"
-#include "VertexBuffer.h"
+using ModelId = std::uint64_t;
 
-// Obj vector to store the loaded model data
-struct ModelData {
-    VertexArray* va;
-    IndexBuffer* ib;
-    VertexBuffer* vb;
-    TextureArray* ta;
-    std::string filePath;
-    glm::vec3 position = glm::vec3(0.0f);
-    glm::vec3 rotation = glm::vec3(0.0f);
-    glm::vec3 scale = glm::vec3(1.0f);
+struct ModelDescription {
+    std::string filePath; // UTF-8, never an OS-specific narrow code page.
+    glm::vec3 position{0.0f};
+    glm::vec3 rotation{0.0f};
+    glm::vec3 scale{1.0f};
 };
 
-bool LoadObject(const std::string& filePath, std::vector<float>& vertices,
-                std::vector<unsigned int>& indices, std::vector<std::string>& diffuse_textures,
-                std::vector<int>& materialIndices);
+struct MeshVertex {
+    glm::vec3 position;
+    glm::vec3 normal;
+    glm::vec2 texCoord;
+};
+
+struct Bounds {
+    glm::vec3 minimum{0.0f};
+    glm::vec3 maximum{0.0f};
+};
+
+struct SubmeshData {
+    std::uint32_t firstIndex = 0;
+    std::uint32_t indexCount = 0;
+    std::uint32_t textureIndex = 0;
+};
+
+struct MeshData {
+    std::vector<MeshVertex> vertices;
+    std::vector<std::uint32_t> indices;
+    std::vector<SubmeshData> submeshes;
+    Bounds bounds;
+};
+
+// This is the entire worker/render-thread boundary: no GL types or process-local handles.
+struct PendingModelData {
+    ModelId requestId = 0;
+    ModelDescription description;
+    MeshData mesh;
+    std::vector<DecodedImage> textures;
+    std::string error;
+
+    bool Success() const {
+        return error.empty() && !mesh.indices.empty();
+    }
+};
+
+PendingModelData LoadModelData(ModelDescription description, const ImportSettings& settings = {});

@@ -1,46 +1,73 @@
-#include "VertexArray.h"
-#include "Renderer.h"
+#include "graphics/VertexArray.h"
 
-VertexArray::VertexArray() {
-    glGenVertexArrays(1, &m_RendererID);
+#include "graphics/IndexBuffer.h"
+#include "graphics/VertexBuffer.h"
+#include "graphics/VertexBufferLayout.h"
+
+#include <glad/glad.h>
+#include <stdexcept>
+
+VertexArray::VertexArray(const GraphicsContext& context)
+    : object(context, GlObject::Kind::VertexArray) {
 }
 
-VertexArray::~VertexArray() {
-    glDeleteVertexArrays(1, &m_RendererID);
-}
-
-void VertexArray::AddBuffer(VertexBuffer& vb, std::vector<int>& MaterialIndices) {
-    Bind();
-    vb.Bind();
-    const auto& elements = vb.GetLayout().GetElements();
-    unsigned int offset = 0;
-    for(unsigned int i = 0; i < elements.size(); i++) {
-        const auto& element = elements[i];
-        glEnableVertexAttribArray(i);
-        glVertexAttribPointer(i,
-                              element.count,
-                              element.type,
-                              element.normalized,
-                              vb.GetLayout().GetStride(),
-                              (const void*)(uintptr_t)offset);
-        offset += element.count * VertexBufferElement::GetSizeOfType(element.type);
+void VertexArray::AddBuffer(const VertexBuffer& buffer, const VertexBufferLayout& layout,
+                            unsigned binding) {
+    object.RequireCurrent();
+    GLint maxAttributes = 0;
+    GLint maxBindings = 0;
+    GLint maxStride = 0;
+    GLint maxOffset = 0;
+    glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &maxAttributes);
+    glGetIntegerv(GL_MAX_VERTEX_ATTRIB_BINDINGS, &maxBindings);
+    glGetIntegerv(GL_MAX_VERTEX_ATTRIB_STRIDE, &maxStride);
+    glGetIntegerv(GL_MAX_VERTEX_ATTRIB_RELATIVE_OFFSET, &maxOffset);
+    if(buffer.GetId() == 0 || layout.GetStride() == 0 ||
+       layout.GetStride() > static_cast<unsigned>(maxStride) ||
+       binding >= static_cast<unsigned>(maxBindings)) {
+        throw std::invalid_argument("Invalid vertex buffer binding or stride");
     }
+    for(const auto& element : layout.GetElements()) {
+        if(element.location >= static_cast<unsigned>(maxAttributes) ||
+           element.offset > static_cast<unsigned>(maxOffset)) {
+            throw std::invalid_argument("Vertex attribute exceeds the driver limits");
+        }
+    }
+    glVertexArrayVertexBuffer(object.GetId(),
+                              binding,
+                              buffer.GetId(),
+                              0,
+                              static_cast<GLsizei>(layout.GetStride()));
+    for(const auto& element : layout.GetElements()) {
+        glEnableVertexArrayAttrib(object.GetId(), element.location);
+        if(element.type == GL_INT || element.type == GL_UNSIGNED_INT) {
+            glVertexArrayAttribIFormat(object.GetId(),
+                                       element.location,
+                                       static_cast<GLint>(element.count),
+                                       element.type,
+                                       element.offset);
+        }
+        else {
+            glVertexArrayAttribFormat(object.GetId(),
+                                      element.location,
+                                      static_cast<GLint>(element.count),
+                                      element.type,
+                                      element.normalized,
+                                      element.offset);
+        }
+        glVertexArrayAttribBinding(object.GetId(), element.location, binding);
+    }
+}
 
-    // A sloppy way to add texture vertex array
-    GLuint texIDVBO;
-    glGenBuffers(1, &texIDVBO);
-    glBindBuffer(GL_ARRAY_BUFFER, texIDVBO);
-    glBufferData(GL_ARRAY_BUFFER, MaterialIndices.size() * sizeof(int), MaterialIndices.data(), GL_STATIC_DRAW);
-
-    // 2. Enable and set the attribute pointer for location 3
-    glEnableVertexAttribArray(3);
-    glVertexAttribIPointer(3, 1, GL_INT, 0, (void*)0); // Note the 'I' for integer attributes
+void VertexArray::SetIndexBuffer(const IndexBuffer& buffer) {
+    object.RequireCurrent();
+    if(buffer.GetId() == 0) {
+        throw std::invalid_argument("Cannot attach a moved-from index buffer");
+    }
+    glVertexArrayElementBuffer(object.GetId(), buffer.GetId());
 }
 
 void VertexArray::Bind() const {
-    glBindVertexArray(m_RendererID);
-}
-
-void VertexArray::Unbind() const {
-    glBindVertexArray(0);
+    object.RequireCurrent();
+    glBindVertexArray(object.GetId());
 }

@@ -1,68 +1,61 @@
-#include "Application.h"
-#include "WindowSystem.h"
-#include "FileParser.h"
-#include <GLFW/glfw3.h>
+#include "core/Application.h"
 
-Application::Application() {
-    window = WindowSystem::GetInstance().GetWindow();
-    view = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -3.0f));
-    control = new Control(window, view);
-    shader = new Shader("../res/shaders/Basic");
-    skybox = new SkyboxSystem();
-    FileParser::GetInstance().LoadSavedFiles();
+#include "graphics/Renderer.h"
+#include "io/FileParser.h"
+#include "ui/ImguiInterface.h"
+#include "window/WindowSystem.h"
+
+#include <GLFW/glfw3.h>
+#include <algorithm>
+
+Application::Application(WindowSystem& window, Renderer& renderer, ImguiInterface& gui,
+                         FileParser& assets, const CameraSettings& cameraSettings)
+    : window(window), renderer(renderer), gui(gui), assets(assets), camera(cameraSettings),
+      control(window.GetWindow()) {
 }
 
-void Application::Run() {
-    float lastFrameTime = 0.0f;
-    bool debugPrinted = false;
-    while (!glfwWindowShouldClose(window)) {
-        float currentFrameTime = (float)glfwGetTime();
-        float deltaTime = currentFrameTime - lastFrameTime;
-        lastFrameTime = currentFrameTime;
+void Application::Run(std::size_t frameLimit) {
+    double lastFrameTime = glfwGetTime();
+    std::size_t frameCount = 0;
+    while(!window.ShouldClose() && (frameLimit == 0 || frameCount < frameLimit)) {
+        window.PollEvents();
+        const double now = glfwGetTime();
+        const float deltaSeconds = static_cast<float>(
+            std::clamp(now - lastFrameTime, 0.0, double{RenderSettings::maxDeltaSeconds}));
+        lastFrameTime = now;
+        const auto [width, height] = window.GetFramebufferSize();
+        camera.Resize(width, height);
 
-        control->UpdateCameraMovement(deltaTime);
-        
-        // Process any pending GPU resource creation from loader threads
-        FileParser::GetInstance().ProcessPendingModels();
-        
+        // Events -> CPU/GPU handoff -> UI/input -> scene -> skybox -> UI -> present.
+        gui.NewFrame();
+        Update(deltaSeconds);
         UpdateGUI();
-        GraphicsContext::renderer->Clear();
-        shader->Bind();
-
-        {
-            std::lock_guard<std::mutex> lock(FileParser::GetInstance().GetObjVectorMutex());
-            auto& objVector = FileParser::GetInstance().GetObjVector();
-            
-            if (!debugPrinted) {
-                std::cout << "Number of models loaded: " << objVector.size() << std::endl;
-                debugPrinted = true;
-            }
-            
-            for (auto& modelData : objVector) {
-                glm::mat4 model = glm::translate(glm::mat4(1.0f), modelData.position);
-                model = glm::rotate(model, glm::radians(modelData.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-                model = glm::rotate(model, glm::radians(modelData.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-                model = glm::rotate(model, glm::radians(modelData.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
-                model = glm::scale(model, modelData.scale);
-                glm::mat4 mvp = GraphicsContext::renderer->GetProjectionMatrix() * view * model;
-                shader->SetUniformMat4f("u_MVP", &mvp[0][0]);
-                GraphicsContext::renderer->Draw(*modelData.va, *modelData.ib, *modelData.ta);
-            }
+        if(width > 0 && height > 0) {
+            RenderScene(width, height);
+            renderer.BeginUI();
         }
-
-        glm::mat4 proj = GraphicsContext::renderer->GetProjectionMatrix();
-        skybox->Render(view, proj);
-        RenderGUI();
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-        glfwSwapInterval(0);
+        gui.Render();
+        if(width > 0 && height > 0) {
+            window.Present();
+        }
+        else {
+            window.WaitForEvents(RenderSettings::maxDeltaSeconds);
+        }
+        ++frameCount;
     }
 }
 
-void Application::UpdateGUI() {
-    // empty
+void Application::Update(float deltaSeconds) {
+    for(const auto& path : window.TakeDroppedFiles()) {
+        assets.LoadAsset(path);
+    }
+    assets.ProcessPendingModels();
+    control.Update(camera, deltaSeconds, gui.WantsMouse(), gui.WantsKeyboard());
 }
 
-void Application::RenderGUI() {
-    // empty
+void Application::RenderScene(int width, int height) {
+    const auto draws = assets.BuildDrawList(camera.GetProjection() * camera.GetView());
+    renderer.BeginScene(width, height);
+    renderer.DrawScene(draws);
+    renderer.DrawSkybox(camera.GetView(), camera.GetProjection());
 }

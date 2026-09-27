@@ -1,13 +1,17 @@
 #pragma once
 
-#include "Application.h"
+#include "core/Application.h"
+#include "io/LoadData.h"
 
-class Editor : public Application {
+#include <optional>
+
+class Editor final : public Application {
 public:
-    Editor();
+    using Application::Application;
+
 protected:
     void UpdateGUI() override;
-    void RenderGUI() override;
+
 private:
-    int selectedModel = 0;
+    std::optional<ModelId> selectedModel;
 };

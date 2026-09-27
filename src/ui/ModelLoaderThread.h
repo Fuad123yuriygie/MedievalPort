@@ -1,61 +1,39 @@
 #pragma once
 
-#include <thread>
+#include "io/LoadData.h"
+
+#include <condition_variable>
+#include <cstddef>
 #include <mutex>
 #include <queue>
-#include <condition_variable>
-#include <string>
-#include <functional>
-#include "LoadData.h"
-
-// Structure to hold data that needs to be uploaded to GPU
-// This is thread-safe data that gets passed from loader thread to main thread
-struct PendingModelData {
-    std::vector<float> vertices;
-    std::vector<unsigned int> indices;
-    std::vector<std::string> diffuseTextures;
-    std::vector<int> materialIndices;
-    std::string filePath;
-    bool loadSuccess = false;
-};
-
-// Callback type: called when a model finishes loading
-using ModelLoadedCallback = std::function<void(const PendingModelData&)>;
+#include <thread>
+#include <vector>
 
 class ModelLoaderThread {
 public:
-    static ModelLoaderThread& GetInstance() {
-        static ModelLoaderThread instance;
-        return instance;
-    }
-
-    // Queue a file for async loading with a callback when done
-    // The callback will be called from the worker thread when the model is loaded
-    void QueueModelLoad(const std::string& filePath, ModelLoadedCallback callback);
-
+    explicit ModelLoaderThread(ImportSettings settings = {});
     ~ModelLoaderThread();
+    ModelLoaderThread(const ModelLoaderThread&) = delete;
+    ModelLoaderThread& operator=(const ModelLoaderThread&) = delete;
+
+    bool QueueModelLoad(ModelDescription description, ModelId requestId);
+    std::vector<PendingModelData> TakeCompleted(std::size_t maxCount);
+    void Stop();
 
 private:
-    ModelLoaderThread();
-
-    // Thread worker function
-    void LoadWorker();
-
-    // Structure to hold a queued job
     struct LoadJob {
-        std::string filePath;
-        ModelLoadedCallback callback;
+        ModelDescription description;
+        ModelId requestId;
     };
 
-    // Thread-safe queue for file paths and callbacks to load
-    std::queue<LoadJob> loadQueue;
-    std::mutex queueMutex;
+    void LoadWorker();
 
-    // Worker thread
-    std::thread workerThread;
-    bool shouldExit = false;
-    std::mutex exitMutex;
-
-    // Condition variable for signaling work
-    std::condition_variable queueCV;
+    ImportSettings settings_;
+    std::mutex queueMutex_;
+    std::condition_variable queueCV_;
+    bool shouldExit_ = false;
+    std::queue<LoadJob> loadQueue_;
+    std::queue<PendingModelData> completedQueue_;
+    std::once_flag stopOnce_;
+    std::thread workerThread_;
 };

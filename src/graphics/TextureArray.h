@@ -1,19 +1,30 @@
 #pragma once
 
-#include <glad/glad.h>
-#include <string>
-#include <vector>
-#include <iostream>
-#include <fstream>
+#include "graphics/GlObject.h"
+
+struct DecodedImage;
 
 class TextureArray {
 public:
-    TextureArray(std::vector<std::string>& diffuseTextures);
-    ~TextureArray();
+    explicit TextureArray(const GraphicsContext& context, int width, int height, int capacity);
+    ~TextureArray() = default;
+    TextureArray(const TextureArray&) = delete;
+    TextureArray& operator=(const TextureArray&) = delete;
+    TextureArray(TextureArray&&) noexcept = default;
+    TextureArray& operator=(TextureArray&&) noexcept = default;
 
-    void Bind() const;
+    void UploadLayer(unsigned layer, const DecodedImage& image);
+    void Bind(unsigned unit = 0) const;
+    unsigned GetId() const {
+        return object.GetId();
+    }
+    int GetCapacity() const {
+        return capacity;
+    }
+
 private:
-    GLuint textureArrayID;
-    unsigned char* LoadImage(const std::string& fileName, int& width, int& height, int& channels);
-    void FreeImage(unsigned char* data);
+    GlObject object;
+    int width;
+    int height;
+    int capacity;
 };

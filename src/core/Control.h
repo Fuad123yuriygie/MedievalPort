@@ -1,33 +1,32 @@
 #pragma once
 
-#include <GLFW/glfw3.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
+#include <glm/vec3.hpp>
 
-// Variables to track mouse movement and camera rotation
-static bool rightMouseButtonPressed = false;
-static double lastMouseX = 0.0, lastMouseY = 0.0;
-static float yaw = -90.0f;
-static float pitch = 0.0f;
-static float sensitivity = 0.1f; // Mouse sensitivity
+struct GLFWwindow;
+class Camera;
 
-// Variables for camera control
-static glm::vec3 cameraPosition(0.0f, 0.0f, 3.0f); // Initial camera position
-static glm::vec3 cameraFront(0.0f, 0.0f, -1.0f);   // Initial camera direction
-static glm::vec3 cameraUp(0.0f, 1.0f, 0.0f);       // Up vector
-static float cameraSpeed = 2.5f;                   // Camera movement speed (units per second)
+struct InputState {
+    glm::vec3 movement{0.0f};
+    double mouseX = 0.0;
+    double mouseY = 0.0;
+    bool rightMouseDown = false;
+    bool focused = false;
+};
 
 class Control {
 public:
-    GLFWwindow* window;
-    glm::mat4& view;
+    explicit Control(GLFWwindow* window);
+    ~Control();
+    Control(const Control&) = delete;
+    Control& operator=(const Control&) = delete;
 
-    Control(GLFWwindow* win, glm::mat4& view);
-    ~Control() = default;
-
-    void UpdateCameraMovement(float deltaTime);
+    void Update(Camera& camera, float deltaSeconds, bool captureMouse, bool captureKeyboard);
 
 private:
-    void ProcessKeyboardInput(float deltaTime);
-    void UpdateCameraDirection();
+    InputState PollInput() const;
+
+    GLFWwindow* window;
+    bool dragging = false;
+    double lastMouseX = 0.0;
+    double lastMouseY = 0.0;
 };

@@ -1,18 +1,23 @@
 #pragma once
 
-#include <glad/glad.h>
+#include "graphics/GlObject.h"
 
-#include "VertexBufferLayout.h"
+#include <cstddef>
+#include <span>
 
 class VertexBuffer {
 public:
-    VertexBuffer(const void* data, unsigned int size);
-    ~VertexBuffer();
-    VertexBufferLayout& GetLayout();
-    void Bind() const;
-    void Unbind() const;
+    VertexBuffer(const GraphicsContext& context, std::span<const std::byte> data);
+    ~VertexBuffer() = default;
+    VertexBuffer(const VertexBuffer&) = delete;
+    VertexBuffer& operator=(const VertexBuffer&) = delete;
+    VertexBuffer(VertexBuffer&&) noexcept = default;
+    VertexBuffer& operator=(VertexBuffer&&) noexcept = default;
+
+    unsigned GetId() const {
+        return object.GetId();
+    }
 
 private:
-    unsigned int m_RendererID;
-    VertexBufferLayout layout;
+    GlObject object;
 };

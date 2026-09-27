@@ -1,174 +1,159 @@
-#include "Shader.h"
+#include "graphics/Shader.h"
 
-Shader::Shader(const std::string& filePath) : m_FilePath(filePath), m_RendererID(0) {
-    ShaderProgramSource source = ParseShader(filePath);
-    m_RendererID = CreateShader(source);
-}
+#include <algorithm>
+#include <array>
+#include <fstream>
+#include <glad/glad.h>
+#include <glm/gtc/type_ptr.hpp>
+#include <sstream>
+#include <stdexcept>
+#include <utility>
 
-Shader::~Shader() {
-    Unbind();
-    glDeleteProgram(m_RendererID);
-}
-
-ShaderProgramSource Shader::ParseShader(const std::string& basePath) {
-    // Map shader stage to file extension
-    const std::vector<std::pair<GLenum, std::string>> shaderFiles = {
-        {GL_VERTEX_SHADER,          ".vert"},
-        {GL_FRAGMENT_SHADER,        ".frag"},
-        {GL_TESS_CONTROL_SHADER,    ".tesc"},
-        {GL_TESS_EVALUATION_SHADER, ".tese"},
-        {GL_GEOMETRY_SHADER,        ".geom"},
-        {GL_COMPUTE_SHADER,         ".comp"}};
-
-    ShaderProgramSource source;
-    for(const auto& [type, ext] : shaderFiles) {
-        std::string shaderFile =
-            basePath + "/" + std::filesystem::path(basePath).filename().string() + ext;
-        std::ifstream file(shaderFile);
-        if(file.is_open()) {
-            std::stringstream buffer;
-            buffer << file.rdbuf();
-            switch(type) {
-            case GL_VERTEX_SHADER:
-                source.VertexSource = buffer.str();
-                break;
-            case GL_FRAGMENT_SHADER:
-                source.FragmentSource = buffer.str();
-                break;
-            case GL_TESS_CONTROL_SHADER:
-                source.TessControlSource = buffer.str();
-                break;
-            case GL_TESS_EVALUATION_SHADER:
-                source.TessEvalSource = buffer.str();
-                break;
-            case GL_GEOMETRY_SHADER:
-                source.GeometrySource = buffer.str();
-                break;
-            case GL_COMPUTE_SHADER:
-                source.ComputeSource = buffer.str();
-                break;
-            }
+namespace
+{
+struct ShaderStage {
+    GLuint id = 0;
+    ShaderStage() = default;
+    ~ShaderStage() {
+        if(id != 0) {
+            glDeleteShader(id);
         }
     }
-    return source;
+    ShaderStage(const ShaderStage&) = delete;
+    ShaderStage& operator=(const ShaderStage&) = delete;
+};
+
+std::string ShaderLog(GLuint shader) {
+    GLint length = 0;
+    glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
+    std::string message(static_cast<std::size_t>(std::max(length, 1)), '\0');
+    GLsizei written = 0;
+    glGetShaderInfoLog(shader, static_cast<GLsizei>(message.size()), &written, message.data());
+    message.resize(static_cast<std::size_t>(written));
+    return message;
 }
 
-unsigned int Shader::CompileShader(unsigned int type, const std::string& source) {
-    unsigned int id = glCreateShader(type);
-    const char* src = source.c_str();
-    glShaderSource(id, 1, &src, nullptr);
-    glCompileShader(id);
+std::string ProgramLog(GLuint program) {
+    GLint length = 0;
+    glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
+    std::string message(static_cast<std::size_t>(std::max(length, 1)), '\0');
+    GLsizei written = 0;
+    glGetProgramInfoLog(program, static_cast<GLsizei>(message.size()), &written, message.data());
+    message.resize(static_cast<std::size_t>(written));
+    return message;
+}
+} // namespace
 
-    int result;
-    glGetShaderiv(id, GL_COMPILE_STATUS, &result);
-    if(result == GL_FALSE) {
-        int length;
-        glGetShaderiv(id, GL_INFO_LOG_LENGTH, &length);
-        char* message = (char*)alloca(length * sizeof(char));
-        glGetShaderInfoLog(id, length, &length, message);
-        std::cout << "Failed to compile ";
-        std::string name;
-        switch(type) {
-        case GL_VERTEX_SHADER:
-            name = "vertex";
-            break;
-        case GL_FRAGMENT_SHADER:
-            name = "fragment";
-            break;
-        case GL_GEOMETRY_SHADER:
-            name = "geometry";
-            break;
-        case GL_COMPUTE_SHADER:
-            name = "compute";
-            break;
-        case GL_TESS_CONTROL_SHADER:
-            name = "tessellation control";
-            break;
-        case GL_TESS_EVALUATION_SHADER:
-            name = "tessellation evaluation";
-            break;
-
-        default:
-            break;
+Shader::Shader(const GraphicsContext& context, const std::filesystem::path& shaderDirectory)
+    : program(context, GlObject::Kind::Program) {
+    constexpr std::array<GLenum, 6> types{GL_VERTEX_SHADER,
+                                          GL_FRAGMENT_SHADER,
+                                          GL_TESS_CONTROL_SHADER,
+                                          GL_TESS_EVALUATION_SHADER,
+                                          GL_GEOMETRY_SHADER,
+                                          GL_COMPUTE_SHADER};
+    constexpr std::array<const char*, 6> extensions{".vert",
+                                                    ".frag",
+                                                    ".tesc",
+                                                    ".tese",
+                                                    ".geom",
+                                                    ".comp"};
+    std::array<std::string, types.size()> sources;
+    for(std::size_t index = 0; index < types.size(); ++index) {
+        const auto path =
+            shaderDirectory / (shaderDirectory.filename().string() + extensions[index]);
+        if(!std::filesystem::exists(path)) {
+            continue;
         }
-        std::cout << name;
-        std::cout << "shader!" << std::endl;
-        std::cout << message << std::endl;
-        glDeleteShader(id);
-        return 0;
+        std::ifstream file(path);
+        if(!file) {
+            throw std::runtime_error("Cannot read shader: " + path.string());
+        }
+        std::ostringstream contents;
+        contents << file.rdbuf();
+        sources[index] = contents.str();
+        if(file.bad() || sources[index].empty()) {
+            throw std::runtime_error("Empty or unreadable shader: " + path.string());
+        }
+    }
+    const bool compute = !sources[5].empty();
+    const bool anyGraphics = std::any_of(sources.begin(),
+                                         sources.begin() + 5,
+                                         [](const auto& source) { return !source.empty(); });
+    if((compute && anyGraphics) || (!compute && (sources[0].empty() || sources[1].empty())) ||
+       (sources[2].empty() != sources[3].empty())) {
+        throw std::runtime_error("Missing or incompatible shader stages in " +
+                                 shaderDirectory.string());
     }
 
-    return id;
-}
-
-unsigned int Shader::CreateShader(const ShaderProgramSource& source) {
-    unsigned int program = glCreateProgram();
-    std::vector<unsigned int> shaders;
-
-    // Helper lambda to compile and attach if source is not empty
-    auto tryAttach = [&](GLenum type, const std::string& src) {
-        if(!src.empty()) {
-            unsigned int id = CompileShader(type, src);
-            if(id) {
-                glAttachShader(program, id);
-                shaders.push_back(id);
-            }
+    std::array<ShaderStage, types.size()> stages;
+    for(std::size_t index = 0; index < types.size(); ++index) {
+        if(sources[index].empty()) {
+            continue;
         }
-    };
-
-    tryAttach(GL_VERTEX_SHADER, source.VertexSource);
-    tryAttach(GL_FRAGMENT_SHADER, source.FragmentSource);
-    tryAttach(GL_TESS_CONTROL_SHADER, source.TessControlSource);
-    tryAttach(GL_TESS_EVALUATION_SHADER, source.TessEvalSource);
-    tryAttach(GL_GEOMETRY_SHADER, source.GeometrySource);
-    tryAttach(GL_COMPUTE_SHADER, source.ComputeSource);
-
-    glLinkProgram(program);
-    glValidateProgram(program);
-
-    for(auto id : shaders)
-        glDeleteShader(id);
-
-    return program;
+        auto& stage = stages[index];
+        stage.id = glCreateShader(types[index]);
+        if(stage.id == 0) {
+            throw std::runtime_error("Cannot create shader stage");
+        }
+        const char* source = sources[index].c_str();
+        glShaderSource(stage.id, 1, &source, nullptr);
+        glCompileShader(stage.id);
+        GLint compiled = GL_FALSE;
+        glGetShaderiv(stage.id, GL_COMPILE_STATUS, &compiled);
+        if(compiled != GL_TRUE) {
+            throw std::runtime_error("Shader compilation failed (" + shaderDirectory.string() +
+                                     extensions[index] + "): " + ShaderLog(stage.id));
+        }
+        glAttachShader(program.GetId(), stage.id);
+    }
+    glLinkProgram(program.GetId());
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program.GetId(), GL_LINK_STATUS, &linked);
+    if(linked != GL_TRUE) {
+        throw std::runtime_error("Shader link failed (" + shaderDirectory.string() +
+                                 "): " + ProgramLog(program.GetId()));
+    }
+    for(const auto& stage : stages) {
+        if(stage.id != 0) {
+            glDetachShader(program.GetId(), stage.id);
+        }
+    }
 }
 
 void Shader::Bind() const {
-    glUseProgram(m_RendererID);
+    program.RequireCurrent();
+    glUseProgram(program.GetId());
 }
 
-void Shader::Unbind() const {
-    glUseProgram(0);
-}
-
-void Shader::SetUniform4f(const std::string& name, float v0, float v1, float v2, float v3) {
-    glUniform4f(GetUniformLocation(name), v0, v1, v2, v3);
-}
-
-void Shader::SetUniform3f(const std::string& name, float v0, float v1, float v2) {
-    glUniform3f(GetUniformLocation(name), v0, v1, v2);
-}
-
-void Shader::SetUniformMat4f(const std::string& name, const float* matrix) {
-    glUniformMatrix4fv(GetUniformLocation(name), 1, GL_FALSE, matrix);
-}
-
-void Shader::SetUniform1i(const std::string& name, int value) {
-    glUniform1i(GetUniformLocation(name), value);
-}
-
-int Shader::GetUniformLocation(const std::string& name) {
-    // Get the location of the uniform variable in the shader program
-    if(m_UniformLocationCache.find(name) != m_UniformLocationCache.end()) {
-        return m_UniformLocationCache[name];
+int Shader::GetUniformLocation(std::string_view name) const {
+    program.RequireCurrent();
+    if(const auto found = uniformLocations.find(name); found != uniformLocations.end()) {
+        return found->second;
     }
+    std::string terminatedName(name);
+    const int location = glGetUniformLocation(program.GetId(), terminatedName.c_str());
+    return uniformLocations.emplace(std::move(terminatedName), location).first->second;
+}
 
-    int location = glGetUniformLocation(m_RendererID, name.c_str());
-    if(location == -1) {
-        std::cout << "Error getting uniform ";
-        std::cout << name;
-        std::cout << " location!";
-        std::cout << std::endl;
+void Shader::SetUniformMat4f(int location, const glm::mat4& matrix) const {
+    program.RequireCurrent();
+    if(location >= 0) {
+        glProgramUniformMatrix4fv(program.GetId(), location, 1, GL_FALSE, glm::value_ptr(matrix));
     }
-    m_UniformLocationCache[name] = location;
-    return location;
+}
+
+void Shader::SetUniform1i(int location, int value) const {
+    program.RequireCurrent();
+    if(location >= 0) {
+        glProgramUniform1i(program.GetId(), location, value);
+    }
+}
+
+void Shader::SetUniformMat4f(std::string_view name, const glm::mat4& matrix) const {
+    SetUniformMat4f(GetUniformLocation(name), matrix);
+}
+
+void Shader::SetUniform1i(std::string_view name, int value) const {
+    SetUniform1i(GetUniformLocation(name), value);
 }

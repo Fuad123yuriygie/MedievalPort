@@ -1,16 +1,28 @@
 #pragma once
 
-#include "VertexBuffer.h"
-#include "VertexBufferLayout.h"
+#include "graphics/GlObject.h"
+
+class IndexBuffer;
+class VertexBuffer;
+class VertexBufferLayout;
 
 class VertexArray {
-private:
-    unsigned int m_RendererID;
-
 public:
-    VertexArray();
-    ~VertexArray();
-    void AddBuffer(VertexBuffer& vb, std::vector<int>& MaterialIndices);
+    explicit VertexArray(const GraphicsContext& context);
+    ~VertexArray() = default;
+    VertexArray(const VertexArray&) = delete;
+    VertexArray& operator=(const VertexArray&) = delete;
+    VertexArray(VertexArray&&) noexcept = default;
+    VertexArray& operator=(VertexArray&&) noexcept = default;
+
+    void AddBuffer(const VertexBuffer& buffer, const VertexBufferLayout& layout,
+                   unsigned binding = 0);
+    void SetIndexBuffer(const IndexBuffer& buffer);
     void Bind() const;
-    void Unbind() const;
+    unsigned GetId() const {
+        return object.GetId();
+    }
+
+private:
+    GlObject object;
 };

@@ -1,4 +1,21 @@
-#include "GraphicsContext.h"
+#include "graphics/GraphicsContext.h"
 
-IRenderer* GraphicsContext::renderer = nullptr;
-IGUI* GraphicsContext::gui = nullptr;
+#include <GLFW/glfw3.h>
+#include <cassert>
+#include <stdexcept>
+
+GraphicsContext::GraphicsContext(GLFWwindow* window)
+    : window(window), ownerThread(std::this_thread::get_id()) {
+    RequireCurrent();
+}
+
+void GraphicsContext::RequireCurrent() const {
+    if(std::this_thread::get_id() != ownerThread || glfwGetCurrentContext() != window || !window) {
+        throw std::logic_error("OpenGL access requires the owning thread and current context");
+    }
+}
+
+void GraphicsContext::AssertCurrent() const noexcept {
+    assert(std::this_thread::get_id() == ownerThread && window &&
+           glfwGetCurrentContext() == window && "OpenGL resource outlived its current context");
+}

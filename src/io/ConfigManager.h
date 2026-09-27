@@ -1,20 +1,17 @@
 #pragma once
 
-#include <fstream>
-#include <glm/vec3.hpp>
-#include <iostream>
-#include <nlohmann/json.hpp>
-#include <string>
+#include "io/LoadData.h"
+
+#include <filesystem>
+#include <span>
 #include <vector>
-
-#include "LoadData.h"
-
-using json = nlohmann::json;
 
 class ConfigManager {
 public:
-    ConfigManager();
-    ~ConfigManager();
-    bool SaveObject(const std::vector<ModelData>& models);
-    std::vector<ModelData> LoadObjectFromJson();
+    explicit ConfigManager(std::filesystem::path filePath);
+    bool SaveObject(std::span<const ModelDescription> models) const;
+    std::vector<ModelDescription> LoadObjectFromJson() const;
+
+private:
+    std::filesystem::path filePath_;
 };

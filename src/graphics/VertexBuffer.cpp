@@ -1,27 +1,20 @@
-#include "VertexBuffer.h"
+#include "graphics/VertexBuffer.h"
 
-VertexBuffer::VertexBuffer(const void* data, unsigned int size) {
-    glGenBuffers(1, &m_RendererID);
-    glBindBuffer(GL_ARRAY_BUFFER, m_RendererID);
-    glBufferData(GL_ARRAY_BUFFER, size, data, GL_STATIC_DRAW);
+#include <glad/glad.h>
+#include <limits>
+#include <stdexcept>
 
-    layout.Push<float>(3); // Position (x, y, z)
-    layout.Push<float>(3); // Normal (nx, ny, nz)
-    layout.Push<float>(2); // Texture coordinates (u, v)
-}
-
-VertexBuffer::~VertexBuffer() {
-    glDeleteBuffers(1, &m_RendererID);
-}
-
-VertexBufferLayout& VertexBuffer::GetLayout() {
-    return layout;
-}
-
-void VertexBuffer::Bind() const {
-    glBindBuffer(GL_ARRAY_BUFFER, m_RendererID);
-}
-
-void VertexBuffer::Unbind() const {
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+VertexBuffer::VertexBuffer(const GraphicsContext& context, std::span<const std::byte> data)
+    : object(context, GlObject::Kind::Buffer) {
+    if(data.empty() ||
+       data.size() > static_cast<std::size_t>(std::numeric_limits<GLsizeiptr>::max())) {
+        throw std::invalid_argument("Vertex buffer data is empty or too large");
+    }
+    const auto size = static_cast<GLsizeiptr>(data.size());
+    glNamedBufferStorage(object.GetId(), size, data.data(), 0);
+    GLint64 allocated = 0;
+    glGetNamedBufferParameteri64v(object.GetId(), GL_BUFFER_SIZE, &allocated);
+    if(allocated != size) {
+        throw std::runtime_error("Vertex buffer allocation failed");
+    }
 }
