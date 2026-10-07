@@ -25,13 +25,14 @@ MedievalPort is a C++ OpenGL application for loading, displaying, and manipulati
 
 - A C++20 compiler (MSVC, GCC, or Clang)
 - CMake 3.24 or later
+- Python 3.8 or later (used to generate GLAD; no pip packages are needed)
 - An OpenGL 4.5 core-capable driver
-- [GLFW](https://www.glfw.org/)
-- [GLAD](https://glad.dav1d.de/)
-- [ImGui](https://github.com/ocornut/imgui)
-- [stb_image](https://github.com/nothings/stb)
-- [GLM](https://github.com/g-truc/glm)
-- [nlohmann/json](https://github.com/nlohmann/json)
+- Internet access for the first CMake configure
+
+GLFW, GLAD, ImGui, GLM, nlohmann/json, stb (image loading/resizing), and tinyobjloader
+are downloaded automatically. Their source URLs, pinned versions, and SHA-256 checksums
+are maintained in [`cmake/Dependencies.cmake`](cmake/Dependencies.cmake). No manual library
+installation or Git submodule initialization is required.
 
 ### Building
 
@@ -51,10 +52,25 @@ MedievalPort is a C++ OpenGL application for loading, displaying, and manipulati
     ```
 
 For Visual Studio generators, the executable is `build/Debug/MedievalPort.exe`. CMake uses an
-installed GLFW 3.4 package, the bundled x64 MinGW library, or fetches GLFW 3.4 sources for the
-selected compiler. Source fetching requires Git and network access. Linux source builds require
+automatically downloaded GLFW 3.4 source release, built with the selected compiler rather than
+a precompiled platform-specific library. Linux source builds require
 OpenGL and X11 development packages; the optional Wayland backend can be enabled with
 `-DGLFW_BUILD_WAYLAND=ON`. The native macOS OpenGL 4.1 implementation is not supported.
+
+Dependency downloads and generated GLAD files stay under `build/_deps/`, which is ignored by
+Git. Subsequent builds reuse them. After the initial download, an offline reconfigure can use
+`-DFETCHCONTENT_FULLY_DISCONNECTED=ON`; turn it off again when changing dependency versions.
+To provide an existing source checkout instead, set `-DFETCHCONTENT_SOURCE_DIR_<NAME>=<path>`
+(for example, `-DFETCHCONTENT_SOURCE_DIR_GLM=/path/to/glm`). Do not commit downloaded sources,
+generated headers, libraries, or the legacy `externals/` directory.
+
+Downloads verify both HTTPS certificates and archive checksums. If a toolchain cannot find
+its trusted certificate bundle, set `-DCMAKE_TLS_CAINFO=/path/to/ca-bundle.crt` rather than
+disabling certificate verification.
+
+In VS Code, the default **build** task configures CMake first, so building or launching the
+project also downloads missing dependencies. CMake Tools or `build/compile_commands.json`
+provides the downloaded include paths to IntelliSense.
 
 Shaders and skybox textures are copied into `res` beside the executable on each build. Asset
 lookup does not depend on the working directory.
@@ -78,16 +94,21 @@ ctest --test-dir build -C Debug --output-on-failure
 ```
 
 CPU tests cover OBJ validation/indexing, material fallbacks, image decode/resize, persistence,
-worker shutdown, camera math, and frustum bounds. They can be built without graphics dependencies
+worker shutdown, camera math, and frustum bounds. They can be built without a graphics driver
 using `-DMEDIEVALPORT_BUILD_APP=OFF`. Enable live OpenGL ownership/rendering/drop-path tests with
 `-DMEDIEVALPORT_ENABLE_GL_TESTS=ON`; these require a desktop driver capable of creating a 4.5 core context.
 `-DMEDIEVALPORT_WARNINGS_AS_ERRORS=ON` enables the same strict project warning policy used by CI.
+CPU-only builds skip GLFW, ImGui, and OpenGL. Scene tests still need Python and GLAD's
+generated headers for vertex-layout checks. With both `-DMEDIEVALPORT_BUILD_APP=OFF` and
+`-DBUILD_TESTING=OFF`, only GLM, nlohmann/json, stb, and tinyobjloader are downloaded,
+and Python is not required.
 
 ## Project Structure
 
 - `src/` - Source code
 - `res/` - Resources (shaders, textures)
 - `build/` - Build output
+- `cmake/Dependencies.cmake` - Dependency source URLs, checksums, and build setup
 - `README.md` - Project documentation
 
 ## License

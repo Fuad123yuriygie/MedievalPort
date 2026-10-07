@@ -3,9 +3,9 @@
         {
             "name": "Win32",
             "includePath": [
-                "${workspaceFolder}/src",
-                "${workspaceFolder}/externals/include"
+                "${workspaceFolder}/src"
             ],
+            "configurationProvider": "ms-vscode.cmake-tools",
             "defines": [
                 "_DEBUG",
                 "UNICODE",

@@ -24,6 +24,8 @@ option(MEDIEVALPORT_BUILD_APP "Build the OpenGL editor" ON)
 option(MEDIEVALPORT_WARNINGS_AS_ERRORS "Treat project warnings as errors" OFF)
 option(MEDIEVALPORT_ENABLE_GL_TESTS "Run tests requiring an OpenGL 4.5 desktop driver" OFF)
 
+include(cmake/Dependencies.cmake)
+
 function(medievalport_project_target target)
     target_compile_features(${target} PUBLIC cxx_std_20)
     set_target_properties(${target} PROPERTIES CXX_EXTENSIONS OFF)
@@ -55,8 +57,7 @@ add_library(MedievalPortCpu STATIC
     src/utils/Log.cpp
 )
 target_include_directories(MedievalPortCpu PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_include_directories(MedievalPortCpu SYSTEM PUBLIC "${PROJECT_SOURCE_DIR}/externals/include")
-target_link_libraries(MedievalPortCpu PUBLIC Threads::Threads)
+target_link_libraries(MedievalPortCpu PUBLIC Threads::Threads MedievalPortCpuDependencies)
 medievalport_project_target(MedievalPortCpu)
 
 if(BUILD_TESTING)
@@ -67,63 +68,12 @@ if(BUILD_TESTING)
     set_tests_properties(Assets PROPERTIES TIMEOUT 30)
 
     add_executable(SceneTests tests/SceneTests.cpp)
-    target_link_libraries(SceneTests PRIVATE MedievalPortCpu)
+    target_link_libraries(SceneTests PRIVATE MedievalPortCpu MedievalPortGlad)
     medievalport_project_target(SceneTests)
     add_test(NAME SceneMath COMMAND SceneTests)
 endif()
 
 if(MEDIEVALPORT_BUILD_APP)
-    find_package(OpenGL REQUIRED)
-    # Match the bundled 3.4 headers used by the ImGui backend (including glfwGetPlatform).
-    find_package(glfw3 3.4 CONFIG QUIET)
-    if(TARGET glfw3::glfw AND NOT TARGET glfw)
-        add_library(glfw ALIAS glfw3::glfw)
-    endif()
-    if(NOT TARGET glfw)
-        if(MINGW AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-            # The bundled GLFW archive is an x64 MinGW build, not an MSVC library.
-            add_library(glfw STATIC IMPORTED)
-            set_target_properties(glfw PROPERTIES
-                IMPORTED_LOCATION "${PROJECT_SOURCE_DIR}/externals/lib/libglfw3.a"
-                INTERFACE_LINK_LIBRARIES "gdi32;user32;shell32"
-            )
-        else()
-            include(FetchContent)
-            set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-            set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-            set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-            set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-            if(UNIX AND NOT APPLE)
-                set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "Build GLFW's optional Wayland backend")
-            endif()
-            FetchContent_Declare(glfw
-                GIT_REPOSITORY https://github.com/glfw/glfw.git
-                GIT_TAG 3.4
-                GIT_SHALLOW TRUE
-            )
-            FetchContent_MakeAvailable(glfw)
-        endif()
-    endif()
-
-    add_library(MedievalPortGlad STATIC externals/src/glad.c)
-    target_include_directories(MedievalPortGlad SYSTEM PUBLIC "${PROJECT_SOURCE_DIR}/externals/include")
-    target_link_libraries(MedievalPortGlad PRIVATE ${CMAKE_DL_LIBS})
-
-    # Keep vendor warnings and the ImGui embedded loader separate from application TUs.
-    add_library(MedievalPortImgui STATIC
-        externals/src/imgui.cpp
-        externals/src/imgui_draw.cpp
-        externals/src/imgui_tables.cpp
-        externals/src/imgui_widgets.cpp
-        externals/src/imgui_impl_glfw.cpp
-        externals/src/imgui_impl_opengl3.cpp
-    )
-    target_include_directories(MedievalPortImgui SYSTEM PUBLIC "${PROJECT_SOURCE_DIR}/externals/include")
-    target_include_directories(MedievalPortImgui PRIVATE "${PROJECT_SOURCE_DIR}/externals/include/imgui")
-    target_compile_features(MedievalPortImgui PRIVATE cxx_std_20)
-    target_compile_definitions(MedievalPortImgui PRIVATE GLFW_INCLUDE_NONE)
-    target_link_libraries(MedievalPortImgui PRIVATE glfw ${CMAKE_DL_LIBS})
-
     add_library(MedievalPortEngine STATIC
         src/core/Application.cpp
         src/core/Control.cpp
@@ -143,8 +93,8 @@ if(MEDIEVALPORT_BUILD_APP)
         src/utils/DebugMessage.cpp
         src/window/WindowSystem.cpp
     )
-    target_link_libraries(MedievalPortEngine PUBLIC MedievalPortCpu
-        PRIVATE MedievalPortGlad MedievalPortImgui glfw OpenGL::GL)
+    target_link_libraries(MedievalPortEngine PUBLIC MedievalPortCpu MedievalPortGlad
+        PRIVATE MedievalPortImgui glfw OpenGL::GL)
     medievalport_project_target(MedievalPortEngine)
 
     add_executable(MedievalPort src/core/main.cpp)

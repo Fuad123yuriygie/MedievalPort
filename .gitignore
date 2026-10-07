@@ -1,5 +1,10 @@
 # Ignore build output
 build/
+/build-*/
+/_deps/
+
+# Legacy bundled dependencies are replaced by CMake downloads.
+/externals/
 
 # Ignore model files
 res/models/

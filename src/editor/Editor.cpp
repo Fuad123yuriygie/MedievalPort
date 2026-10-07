@@ -4,7 +4,7 @@
 
 #include <algorithm>
 #include <glm/gtc/type_ptr.hpp>
-#include <imgui/imgui.h>
+#include <imgui.h>
 
 void Editor::UpdateGUI() {
     // Cached snapshot: rebuilt only when scene state changes, not on every frame.
