@@ -1,6 +1,6 @@
 #pragma once
 
-#include "io/LoadData.h"
+#include "io/SceneTypes.h"
 
 #include <array>
 #include <glm/mat4x4.hpp>

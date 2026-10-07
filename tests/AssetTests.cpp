@@ -1,8 +1,8 @@
 #include "io/ConfigManager.h"
 #include "io/ImageData.h"
 #include "io/LoadData.h"
+#include "io/ModelLoaderThread.h"
 #include "io/PathUtils.h"
-#include "ui/ModelLoaderThread.h"
 
 #include <algorithm>
 #include <array>
@@ -91,6 +91,11 @@ bool Equal(const glm::vec3& a, const glm::vec3& b) {
     return a.x == b.x && a.y == b.y && a.z == b.z;
 }
 
+bool Near(const glm::vec3& a, const glm::vec3& b) {
+    return std::abs(a.x - b.x) < 1e-4f && std::abs(a.y - b.y) < 1e-4f &&
+           std::abs(a.z - b.z) < 1e-4f;
+}
+
 void WritePpm(const std::filesystem::path& path) {
     std::string image = "P6\n2 2\n255\n";
     constexpr std::array<unsigned char, 12> pixels =
@@ -132,10 +137,14 @@ void ValidateModel(const PendingModelData& model, int textureSize) {
         Check(std::isfinite(vertex.texCoord.x) && std::isfinite(vertex.texCoord.y), "Nonfinite UV");
     }
     std::size_t covered = 0;
+    Check(!model.mesh.materials.empty(), "Successful model has no material records");
     for(const auto& submesh : model.mesh.submeshes) {
         Check(submesh.firstIndex == covered, "Submeshes do not cover contiguous index ranges");
         Check(submesh.indexCount != 0 && submesh.indexCount % 3 == 0, "Invalid submesh count");
         Check(submesh.textureIndex < model.textures.size(), "Invalid submesh texture index");
+        Check(submesh.materialIndex < model.mesh.materials.size(), "Invalid submesh material index");
+        Check(model.mesh.materials[submesh.materialIndex].textureIndex == submesh.textureIndex,
+              "Submesh texture and material disagree");
         covered += submesh.indexCount;
     }
     Check(covered == model.mesh.indices.size(), "Submeshes do not cover all indices");
@@ -342,7 +351,8 @@ void TestImporter(const std::filesystem::path& root) {
           "Shared image decoded into duplicate texture entries");
     Check(texturedModel.textures[1].key == PathToUtf8(std::filesystem::weakly_canonical(imagePath)),
           "Nested MTL-relative texture path was not preserved");
-    Check(texturedModel.mesh.vertices.size() == 15, "Material index missing from full vertex key");
+    Check(texturedModel.mesh.vertices.size() == 3,
+          "Material assignment incorrectly split vertices sharing attributes");
     Check(texturedModel.mesh.submeshes.size() == 5, "Faces were not grouped by material");
     Check(texturedModel.mesh.submeshes[0].indexCount == 6 &&
               texturedModel.mesh.submeshes[0].textureIndex == 1 &&
@@ -372,7 +382,7 @@ void TestImporter(const std::filesystem::path& root) {
     const auto multiLibrary = LoadModelData(Describe(multiLibraryModel), settings);
     ValidateModel(multiLibrary, 4);
     Check(multiLibrary.textures.size() == 3 && multiLibrary.mesh.submeshes.size() == 2 &&
-              multiLibrary.mesh.vertices.size() == 6,
+              multiLibrary.mesh.vertices.size() == 3,
           "Later material libraries or shape records were lost");
     Check(multiLibrary.mesh.submeshes[0].textureIndex == 1 &&
               multiLibrary.mesh.submeshes[1].textureIndex == 2,
@@ -396,6 +406,30 @@ void TestImporter(const std::filesystem::path& root) {
     ValidateModel(checked, 4);
     Check(checked.textures.size() == 2 && checked.mesh.submeshes[0].textureIndex == 1,
           "Valid diffuse options or filtering unused material fields lost the texture");
+    Check(Near(checked.mesh.materials[0].diffuse, {1.0f, 0.0f, 0.0f}),
+          "Authored Kd diffuse was discarded or normalized incorrectly");
+
+    const auto colorMaterial = root / "color.mtl";
+    const auto colorModel = root / "color.obj";
+    WriteFile(colorMaterial,
+              "newmtl translucent\nKd 0.25 0.5 0.75\nd 0.5\n"
+              "newmtl cutout\nKd 1 1 1\nmap_d tex/tiny.ppm\n");
+    WriteFile(colorModel,
+              "mtllib color.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\n"
+              "usemtl translucent\nf 1 2 3\nusemtl cutout\nf 1 2 3\n");
+    const auto colored = LoadModelData(Describe(colorModel), settings);
+    ValidateModel(colored, 4);
+    Check(colored.textures.size() == 1, "Alpha map or diffuse tint decoded a color texture");
+    Check(colored.mesh.materials.size() == 2, "Material assignment was lost");
+    Check(Near(colored.mesh.materials[0].diffuse, {0.25f, 0.5f, 0.75f}),
+          "Authored Kd diffuse was not preserved");
+    Check(colored.mesh.materials[0].opacity == 0.5f &&
+              colored.mesh.materials[0].alphaMode == AlphaMode::Blend,
+          "Authored opacity did not select blended alpha");
+    Check(colored.mesh.materials[1].alphaMode == AlphaMode::Mask,
+          "map_d did not select alpha masking");
+    Check(colored.mesh.materials[0].alphaMode != colored.mesh.materials[1].alphaMode,
+          "Alpha modes collapsed to a single opaque mode");
     for(const std::string_view option : {"-texres 2147483648",
                                          "-boost 1e999999999999",
                                          "-o 0 0 1e999999999999",
@@ -710,6 +744,27 @@ void TestWorker(const std::filesystem::path& root) {
     secondStop.get();
     Check(!busy.QueueModelLoad(description, 900), "Busy stopped worker accepted a new job");
     Check(busy.TakeCompleted(2).empty(), "Busy Stop retained canceled results");
+
+    // Cancellation by request ID must release both queued and in-flight imports promptly.
+    {
+        ModelLoaderThread cancellable(settings);
+        Check(cancellable.QueueModelLoad(Describe(busyPath), 700),
+              "Cannot queue in-flight cancellation fixture");
+        Check(cancellable.QueueModelLoad(Describe(busyPath), 701),
+              "Cannot queue pending cancellation fixture");
+        std::this_thread::sleep_for(5ms);
+        cancellable.Cancel(700);
+        cancellable.Cancel(701);
+        std::this_thread::sleep_for(50ms);
+        for(const auto& result : cancellable.TakeCompleted(8)) {
+            Check(result.requestId != 700 && result.requestId != 701,
+                  "A cancelled import was still published");
+        }
+        const auto before = std::chrono::steady_clock::now();
+        cancellable.Stop();
+        Check(std::chrono::steady_clock::now() - before < 5s,
+              "Stop waited for a cancelled import to finish");
+    }
 }
 } // namespace
 

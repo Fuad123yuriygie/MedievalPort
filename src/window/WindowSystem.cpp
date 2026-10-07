@@ -30,6 +30,8 @@ WindowSystem::WindowSystem(const RenderSettings& settings) {
         glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
         glfwWindowHint(GLFW_VISIBLE, settings.visible ? GLFW_TRUE : GLFW_FALSE);
         glfwWindowHint(GLFW_SAMPLES, settings.samples);
+        // Request an sRGB-capable default framebuffer so output encoding can happen exactly once.
+        glfwWindowHint(GLFW_SRGB_CAPABLE, GLFW_TRUE);
         window =
             glfwCreateWindow(settings.width, settings.height, "MedievalPort", nullptr, nullptr);
         if(!window) {
@@ -46,7 +48,9 @@ WindowSystem::WindowSystem(const RenderSettings& settings) {
             throw std::runtime_error("The driver did not provide OpenGL 4.5 core");
         }
         context = std::make_unique<GraphicsContext>(window);
-        InstallDebugOutput(*context);
+        if(settings.debugOutput) {
+            InstallDebugOutput(*context, settings.synchronousDebugOutput);
+        }
         Log(LogLevel::Info, reinterpret_cast<const char*>(glGetString(GL_VERSION)));
         glfwSwapInterval(settings.vsync ? 1 : 0);
         glfwSetWindowUserPointer(window, this);

@@ -136,6 +136,11 @@ int main(int argc, char** argv) {
         Renderer renderer(window.GetContext(), assetRoot, settings);
         Editor editor(window, renderer, gui, assets);
         editor.Run(frameLimit);
+        // Explicit, user-visible save while the window, UI and context are still operational.
+        if(assets.IsDirty() && !assets.SaveScene()) {
+            Log(LogLevel::Error, "Scene changes could not be saved before exit");
+            return 1;
+        }
         return 0;
     } catch(const std::exception& error) {
         Log(LogLevel::Error, error.what());

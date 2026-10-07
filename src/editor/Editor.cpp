@@ -7,7 +7,8 @@
 #include <imgui/imgui.h>
 
 void Editor::UpdateGUI() {
-    const auto models = Assets().GetModelViews();
+    // Cached snapshot: rebuilt only when scene state changes, not on every frame.
+    const auto& models = Assets().GetModelViews();
     auto selected = std::find_if(models.begin(), models.end(), [&](const auto& model) {
         return selectedModel && model.id == *selectedModel;
     });
@@ -24,14 +25,25 @@ void Editor::UpdateGUI() {
                     frameRate > 0.0f ? 1000.0f / frameRate : 0.0f,
                     frameRate);
         ImGui::Separator();
+        // Explicit persistence while the application is still fully operational.
+        if(ImGui::Button("Save Scene")) {
+            if(Assets().SaveScene()) {
+                saveStatus = "Scene saved";
+            }
+            else {
+                saveStatus = "Save failed - previous file kept";
+            }
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted(Assets().IsDirty() ? "Unsaved changes"
+                                                  : (saveStatus.empty() ? "Saved" : saveStatus.c_str()));
+        ImGui::Separator();
         const char* preview =
             selected == models.end() ? "No models" : selected->description.filePath.c_str();
         if(ImGui::BeginCombo("Select Model", preview)) {
             for(const auto& model : models) {
                 const bool isSelected = selectedModel && *selectedModel == model.id;
-                const std::string label =
-                    model.description.filePath + "##" + std::to_string(model.id);
-                if(ImGui::Selectable(label.c_str(), isSelected)) {
+                if(ImGui::Selectable(model.label.c_str(), isSelected)) {
                     selectedModel = model.id;
                 }
                 if(isSelected) {
@@ -41,25 +53,23 @@ void Editor::UpdateGUI() {
             ImGui::EndCombo();
         }
         if(selectedModel) {
-            if(auto description = Assets().GetDescription(*selectedModel)) {
+            if(selected != models.end()) {
                 ImGui::Separator();
                 ImGui::TextUnformatted("Transform");
-                bool changed =
-                    ImGui::DragFloat3("Position", glm::value_ptr(description->position), 0.01f);
-                changed |=
-                    ImGui::DragFloat3("Rotation", glm::value_ptr(description->rotation), 1.0f);
-                changed |= ImGui::DragFloat3("Scale", glm::value_ptr(description->scale), 0.01f);
+                // Edit from the snapshot's transforms; no file path is copied to change a transform.
+                glm::vec3 position = selected->description.position;
+                glm::vec3 rotation = selected->description.rotation;
+                glm::vec3 scale = selected->description.scale;
+                bool changed = ImGui::DragFloat3("Position", glm::value_ptr(position), 0.01f);
+                changed |= ImGui::DragFloat3("Rotation", glm::value_ptr(rotation), 1.0f);
+                changed |= ImGui::DragFloat3("Scale", glm::value_ptr(scale), 0.01f);
                 if(changed) {
-                    Assets().UpdateTransform(*selectedModel, *description);
+                    Assets().UpdateTransform(*selectedModel, position, rotation, scale);
                 }
-                const auto status =
-                    std::find_if(models.begin(), models.end(), [&](const auto& model) {
-                        return model.id == *selectedModel;
-                    });
-                if(status != models.end() && !status->error.empty()) {
-                    ImGui::TextWrapped("Load failed: %s", status->error.c_str());
+                if(!selected->error.empty()) {
+                    ImGui::TextWrapped("Load failed: %s", selected->error.c_str());
                 }
-                else if(status != models.end() && !status->loaded) {
+                else if(!selected->loaded) {
                     ImGui::TextUnformatted("Loading...");
                 }
                 if(ImGui::Button("Remove Model")) {

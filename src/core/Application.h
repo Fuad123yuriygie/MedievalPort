@@ -2,8 +2,10 @@
 
 #include "core/Camera.h"
 #include "core/Control.h"
+#include "graphics/Renderer.h"
 
 #include <cstddef>
+#include <vector>
 
 class WindowSystem;
 class Renderer;
@@ -36,4 +38,6 @@ private:
     FileParser& assets;
     Camera camera;
     Control control;
+    // Reused across frames so submission does not allocate a fresh draw vector every frame.
+    std::vector<DrawItem> drawList;
 };

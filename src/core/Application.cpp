@@ -54,8 +54,8 @@ void Application::Update(float deltaSeconds) {
 }
 
 void Application::RenderScene(int width, int height) {
-    const auto draws = assets.BuildDrawList(camera.GetProjection() * camera.GetView());
+    assets.BuildDrawList(camera.GetProjection() * camera.GetView(), camera.GetPosition(), drawList);
     renderer.BeginScene(width, height);
-    renderer.DrawScene(draws);
+    renderer.DrawScene(drawList);
     renderer.DrawSkybox(camera.GetView(), camera.GetProjection());
 }

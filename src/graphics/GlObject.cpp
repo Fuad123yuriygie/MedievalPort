@@ -1,6 +1,6 @@
-#include "graphics/GlObject.h"
+#include "GlObject.h"
 
-#include "graphics/GraphicsContext.h"
+#include "GraphicsContext.h"
 
 #include <glad/glad.h>
 #include <stdexcept>

@@ -190,7 +190,8 @@ void TestOwnership(const GraphicsContext& context, const std::filesystem::path& 
     CheckGl();
 }
 
-void TestShaderFailures(const GraphicsContext& context, const std::filesystem::path& root) {
+void TestShaderFailures(const GraphicsContext& context, const std::filesystem::path& root,
+                        const std::filesystem::path& assetRoot) {
     const auto fails =
         [&](const char* name, const std::string& vertex, const std::string& fragment) {
             const auto directory = root / name;
@@ -216,6 +217,25 @@ void TestShaderFailures(const GraphicsContext& context, const std::filesystem::p
     fails("LinkFailure",
           "#version 450 core\nout vec3 data; void main(){data=vec3(1);gl_Position=vec4(0);}\n",
           "#version 450 core\nin vec2 data; out vec4 color; void main(){color=vec4(data,0,1);}\n");
+    // Required interfaces are validated, while genuinely optional uniforms remain harmless.
+    Shader program(context, assetRoot / "shaders" / "Basic");
+    Check(program.GetUniformLocation("optimized_out") == -1, "Missing uniform should be harmless");
+    bool missingRejected = false;
+    try {
+        program.RequireUniformLocation("optimized_out", GL_FLOAT_MAT4);
+    } catch(const std::runtime_error&) {
+        missingRejected = true;
+    }
+    Check(missingRejected, "A missing required uniform was accepted");
+    bool wrongTypeRejected = false;
+    try {
+        program.RequireUniformLocation("u_MVP", GL_INT);
+    } catch(const std::runtime_error&) {
+        wrongTypeRejected = true;
+    }
+    Check(wrongTypeRejected, "A wrongly typed required uniform was accepted");
+    Check(program.RequireUniformLocation("u_MVP", GL_FLOAT_MAT4) >= 0,
+          "A valid required uniform was rejected");
     CheckGl();
 }
 
@@ -274,6 +294,17 @@ void TestTexturePages(const GraphicsContext& context, const std::filesystem::pat
     Check(pages.size() == 2, "Materials were not shared across bounded texture pages");
     Check(colors == std::set<std::uint32_t>{0xff0000, 0x00ff00, 0x0000ff},
           "Local material IDs were not remapped to the correct shared texture layers");
+    // The mip chain must be allocated and selected for minification, not just level zero.
+    for(const auto& draw : draws) {
+        GLint minFilter = 0;
+        GLint levelOneWidth = 0;
+        glGetTextureParameteriv(draw.textureArray->GetId(), GL_TEXTURE_MIN_FILTER, &minFilter);
+        glGetTextureLevelParameteriv(draw.textureArray->GetId(), 1, GL_TEXTURE_WIDTH,
+                                     &levelOneWidth);
+        Check(minFilter == GL_LINEAR_MIPMAP_LINEAR,
+              "World textures do not use mipmapped minification");
+        Check(levelOneWidth == 4, "World textures have no allocated mip level 1");
+    }
     assets.Shutdown();
     for(const GLuint page : pages) {
         Check(glIsTexture(page) == GL_FALSE, "Shared texture page was leaked");
@@ -330,7 +361,9 @@ void TestScene(WindowSystem& window, const std::filesystem::path& root,
             std::count_if(views.begin(), views.end(), [](const auto& model) {
                 return model.loaded;
             }));
-        Check(count <= previouslyLoaded + 1, "Per-frame GPU upload budget was exceeded");
+        // Two instances of one asset share a single import, so they may become renderable in the
+        // same frame; the per-frame policy bounds imports, not shared instances.
+        Check(count <= previouslyLoaded + 2, "Per-frame GPU upload budget was exceeded");
         for(const auto& view : views) {
             Check(view.error.empty(), "Async model import failed");
         }
@@ -378,6 +411,49 @@ void TestScene(WindowSystem& window, const std::filesystem::path& root,
     Check(depthWrites == GL_TRUE, "Pass transition did not restore depth writes");
     CheckGl();
 
+    // Consecutive submissions must not leak front-face winding: a mirrored submission followed by
+    // a normal one must still restore GL_CCW for the normal geometry.
+    auto winding = assets.BuildDrawList(glm::mat4(1.0f));
+    Check(!winding.empty(), "Winding regression test has no geometry");
+    for(auto& draw : winding) {
+        draw.blended = false;
+        draw.alphaCutoff = 0.0f;
+    }
+    renderer.BeginScene(64, 64);
+    for(auto& draw : winding) {
+        draw.mirrored = true;
+    }
+    renderer.DrawScene(winding);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    for(auto& draw : winding) {
+        draw.mirrored = false;
+    }
+    renderer.DrawScene(winding);
+    std::array<unsigned char, 4> windingCenter{};
+    glReadPixels(32, 32, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, windingCenter.data());
+    Check(windingCenter[0] > 200 && windingCenter[1] > 200 && windingCenter[2] > 200,
+          "Front-face winding leaked between DrawScene submissions");
+
+    // Alpha is an explicit material policy, not a side effect of the shader writing an alpha value.
+    renderer.BeginScene(64, 64);
+    for(auto& draw : winding) {
+        draw.alphaCutoff = 0.9f;
+        draw.baseColor = {1.0f, 1.0f, 1.0f, 0.5f};
+    }
+    renderer.DrawScene(winding);
+    std::array<unsigned char, 4> masked{};
+    glReadPixels(32, 32, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, masked.data());
+    Check(masked[0] < 200 && masked[1] < 200 && masked[2] < 200,
+          "Alpha-masked fragments were not discarded");
+    for(auto& draw : winding) {
+        draw.alphaCutoff = 0.0f;
+    }
+    renderer.DrawScene(winding);
+    std::array<unsigned char, 4> opaque{};
+    glReadPixels(32, 32, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, opaque.data());
+    Check(opaque[0] > 200, "Opaque rendering stopped after the masked pass");
+    CheckGl();
+
     // Exercise the actual GLFW drop event path and the editor frame orchestration.
     const auto drop = glfwSetDropCallback(window.GetWindow(), nullptr);
     Check(drop != nullptr, "Window has no file drop event callback");
@@ -418,7 +494,7 @@ int main(int argc, char** argv) {
         settings.visible = false;
         WindowSystem window(settings);
         TestOwnership(window.GetContext(), argv[1]);
-        TestShaderFailures(window.GetContext(), temporary.path);
+        TestShaderFailures(window.GetContext(), temporary.path, argv[1]);
         TestTexturePages(window.GetContext(), temporary.path);
         TestScene(window, temporary.path, argv[1]);
         TestRestoreFailure(window.GetContext(), temporary.path);

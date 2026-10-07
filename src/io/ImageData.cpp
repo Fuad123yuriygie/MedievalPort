@@ -10,27 +10,54 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 
 namespace {
-std::size_t RgbaBytes(int width, int height) {
+std::size_t RgbaBytes(int width, int height, std::size_t maxPixels = 0) {
     // stb's dimensions and strides are signed ints, even on 64-bit builds.
     constexpr auto limit = static_cast<std::size_t>(std::numeric_limits<int>::max());
     if(width <= 0 || height <= 0 || static_cast<std::size_t>(width) > limit / 4 ||
        static_cast<std::size_t>(height) > limit / (static_cast<std::size_t>(width) * 4)) {
         throw std::invalid_argument("Invalid or oversized RGBA image dimensions");
     }
-    return static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4;
+    const auto pixels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    if(maxPixels != 0 && pixels > maxPixels) {
+        throw std::runtime_error("Image exceeds the configured decoded-pixel budget");
+    }
+    return pixels * 4;
+}
+
+void HashCombine(std::uint64_t& seed, std::uint64_t value) {
+    seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+}
+
+std::uint64_t SourceFingerprint(const std::filesystem::path& path, std::uintmax_t size,
+                                int width, int height, ColorSpace colorSpace) {
+    std::uint64_t fingerprint = 0xcbf29ce484222325ull;
+    HashCombine(fingerprint, size);
+    std::error_code error;
+    const auto modified = std::filesystem::last_write_time(path, error);
+    if(!error) {
+        HashCombine(fingerprint,
+                    static_cast<std::uint64_t>(modified.time_since_epoch().count()));
+    }
+    HashCombine(fingerprint, static_cast<std::uint64_t>(width));
+    HashCombine(fingerprint, static_cast<std::uint64_t>(height));
+    HashCombine(fingerprint, colorSpace == ColorSpace::Srgb ? 1u : 0u);
+    return fingerprint;
 }
 } // namespace
 
 DecodedImage DecodeImage(const std::filesystem::path& path, bool flipVertical,
-                         int targetWidth, int targetHeight) {
+                         int targetWidth, int targetHeight, ColorSpace colorSpace,
+                         std::size_t maxEncodedBytes, std::size_t maxDecodedPixels) {
     if(targetWidth != 0 || targetHeight != 0) {
-        RgbaBytes(targetWidth, targetHeight);
+        RgbaBytes(targetWidth, targetHeight, maxDecodedPixels);
     }
     const auto normalizedPath = std::filesystem::weakly_canonical(std::filesystem::absolute(path));
     const auto pathText = PathToUtf8(normalizedPath);
@@ -41,6 +68,10 @@ DecodedImage DecodeImage(const std::filesystem::path& path, bool flipVertical,
     const auto length = file.tellg();
     if(length <= 0 || length > std::numeric_limits<int>::max()) {
         throw std::runtime_error("Invalid or oversized image file: " + pathText);
+    }
+    const auto encodedSize64 = static_cast<std::uintmax_t>(length);
+    if(maxEncodedBytes != 0 && encodedSize64 > maxEncodedBytes) {
+        throw std::runtime_error("Image exceeds the configured encoded-byte budget: " + pathText);
     }
     std::vector<stbi_uc> encoded(static_cast<std::size_t>(length));
     file.seekg(0);
@@ -56,7 +87,7 @@ DecodedImage DecodeImage(const std::filesystem::path& path, bool flipVertical,
     if(!stbi_info_from_memory(encoded.data(), encodedSize, &width, &height, &channels)) {
         throw std::runtime_error("Invalid image header: " + pathText);
     }
-    RgbaBytes(width, height);
+    RgbaBytes(width, height, maxDecodedPixels);
     const std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> decoded(
         stbi_load_from_memory(encoded.data(), encodedSize, &width, &height, &channels, STBI_rgb_alpha),
         &stbi_image_free);
@@ -65,19 +96,30 @@ DecodedImage DecodeImage(const std::filesystem::path& path, bool flipVertical,
         throw std::runtime_error("Cannot decode image: " + pathText + ": " +
                                  (reason ? reason : "unknown decoder error"));
     }
-    RgbaBytes(width, height);
+    RgbaBytes(width, height, maxDecodedPixels);
 
     DecodedImage image;
     image.key = pathText;
+    image.colorSpace = colorSpace;
     image.width = targetWidth == 0 ? width : targetWidth;
     image.height = targetHeight == 0 ? height : targetHeight;
-    image.pixels.resize(RgbaBytes(image.width, image.height));
+    image.contentFingerprint =
+        SourceFingerprint(normalizedPath, encodedSize64, image.width, image.height, colorSpace) ^
+        (flipVertical ? 0x9e3779b97f4a7c15ull : 0ull);
+    image.pixels.resize(RgbaBytes(image.width, image.height, maxDecodedPixels));
     if(image.width == width && image.height == height) {
         std::memcpy(image.pixels.data(), decoded.get(), image.pixels.size());
     }
-    else if(!stbir_resize_uint8_linear(decoded.get(), width, height, 0, image.pixels.data(),
-                                      image.width, image.height, 0, STBIR_RGBA)) {
-        throw std::runtime_error("Cannot resize image: " + pathText);
+    else {
+        // Resize in the image's own color space: sRGB assets must be filtered in linear light,
+        // linear data must stay linear.
+        const auto resize = colorSpace == ColorSpace::Srgb
+                                ? &stbir_resize_uint8_srgb
+                                : &stbir_resize_uint8_linear;
+        if(!resize(decoded.get(), width, height, 0, image.pixels.data(), image.width, image.height, 0,
+                   STBIR_RGBA)) {
+            throw std::runtime_error("Cannot resize image: " + pathText);
+        }
     }
     if(flipVertical) {
         const auto rowBytes = static_cast<std::size_t>(image.width) * 4;
@@ -96,6 +138,12 @@ DecodedImage MakeSolidImage(std::string key, int size, std::array<std::uint8_t, 
     image.key = std::move(key);
     image.width = size;
     image.height = size;
+    image.contentFingerprint = 0xcbf29ce484222325ull;
+    HashCombine(image.contentFingerprint, static_cast<std::uint64_t>(size));
+    HashCombine(image.contentFingerprint,
+                static_cast<std::uint64_t>(color[0]) | (static_cast<std::uint64_t>(color[1]) << 8) |
+                    (static_cast<std::uint64_t>(color[2]) << 16) |
+                    (static_cast<std::uint64_t>(color[3]) << 24));
     image.pixels.resize(RgbaBytes(size, size));
     for(std::size_t i = 0; i < image.pixels.size(); i += color.size()) {
         std::copy(color.begin(), color.end(), image.pixels.begin() + i);

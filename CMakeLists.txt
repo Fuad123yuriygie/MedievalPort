@@ -11,6 +11,12 @@ endif()
 
 project(MedievalPort LANGUAGES C CXX)
 
+# Emit compile_commands.json so editor tooling resolves the real per-file flags.
+# The Visual Studio generators do not support this, so only request it elsewhere.
+if(NOT CMAKE_GENERATOR MATCHES "Visual Studio")
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
+
 include(CTest)
 find_package(Threads REQUIRED)
 
@@ -45,7 +51,7 @@ add_library(MedievalPortCpu STATIC
     src/io/ConfigManager.cpp
     src/io/ImageData.cpp
     src/io/LoadData.cpp
-    src/ui/ModelLoaderThread.cpp
+    src/io/ModelLoaderThread.cpp
     src/utils/Log.cpp
 )
 target_include_directories(MedievalPortCpu PUBLIC "${PROJECT_SOURCE_DIR}/src")
@@ -129,6 +135,7 @@ if(MEDIEVALPORT_BUILD_APP)
         src/graphics/Shader.cpp
         src/graphics/SkyboxSystem.cpp
         src/graphics/TextureArray.cpp
+        src/graphics/TextureResidency.cpp
         src/graphics/VertexArray.cpp
         src/graphics/VertexBuffer.cpp
         src/io/FileParser.cpp

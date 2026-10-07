@@ -3,12 +3,21 @@
 #include <iostream>
 #include <mutex>
 
-void Log(LogLevel level, std::string_view message) noexcept {
+bool ShouldLog(LogLevel level) noexcept {
 #ifdef NDEBUG
     if(level == LogLevel::Debug) {
+        return false;
+    }
+#else
+    (void)level;
+#endif
+    return true;
+}
+
+void Log(LogLevel level, std::string_view message) noexcept {
+    if(!ShouldLog(level)) {
         return;
     }
-#endif
     try {
         static std::mutex sinkMutex;
         constexpr std::string_view labels[] = {"debug", "info", "warning", "error"};

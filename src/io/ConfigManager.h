@@ -1,6 +1,6 @@
 #pragma once
 
-#include "io/LoadData.h"
+#include "io/SceneTypes.h"
 
 #include <filesystem>
 #include <span>

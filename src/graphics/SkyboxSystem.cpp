@@ -66,7 +66,12 @@ SkyboxSystem::SkyboxSystem(const GraphicsContext& context, const std::filesystem
             images[face] = MakeSolidImage("skybox-fallback", textureSize, {80, 100, 140, 255});
         }
     }
-    glTextureStorage2D(cubemap.GetId(), 1, GL_RGBA8, textureSize, textureSize);
+    int mipLevels = 1;
+    for(int size = textureSize; size > 1; size /= 2) {
+        ++mipLevels;
+    }
+    // The cubemap holds encoded color, so store it as sRGB and supply the full mip chain.
+    glTextureStorage2D(cubemap.GetId(), mipLevels, GL_SRGB8_ALPHA8, textureSize, textureSize);
     GLint allocatedWidth = 0;
     glGetTextureLevelParameteriv(cubemap.GetId(), 0, GL_TEXTURE_WIDTH, &allocatedWidth);
     if(allocatedWidth != textureSize) {
@@ -88,7 +93,9 @@ SkyboxSystem::SkyboxSystem(const GraphicsContext& context, const std::filesystem
                                 images[face].pixels.data());
         }
     }
-    glTextureParameteri(cubemap.GetId(), GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glGenerateTextureMipmap(cubemap.GetId());
+    glTextureParameteri(cubemap.GetId(), GL_TEXTURE_MAX_LEVEL, mipLevels - 1);
+    glTextureParameteri(cubemap.GetId(), GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTextureParameteri(cubemap.GetId(), GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTextureParameteri(cubemap.GetId(), GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTextureParameteri(cubemap.GetId(), GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);

@@ -136,6 +136,30 @@ int Shader::GetUniformLocation(std::string_view name) const {
     return uniformLocations.emplace(std::move(terminatedName), location).first->second;
 }
 
+int Shader::RequireUniformLocation(std::string_view name, unsigned expectedType) const {
+    program.RequireCurrent();
+    std::string terminatedName(name);
+    const unsigned index = glGetProgramResourceIndex(program.GetId(), GL_UNIFORM,
+                                                     terminatedName.c_str());
+    if(index == GL_INVALID_INDEX) {
+        throw std::runtime_error("Required shader uniform is missing: " + terminatedName);
+    }
+    GLint type = 0;
+    GLsizei written = 0;
+    const GLenum property = GL_TYPE;
+    glGetProgramResourceiv(program.GetId(), GL_UNIFORM, index, 1, &property, 1, &written, &type);
+    if(written != 1 || static_cast<unsigned>(type) != expectedType) {
+        throw std::runtime_error("Required shader uniform has an unexpected type: " +
+                                 terminatedName);
+    }
+    const int location = glGetUniformLocation(program.GetId(), terminatedName.c_str());
+    if(location < 0) {
+        throw std::runtime_error("Required shader uniform cannot be located: " + terminatedName);
+    }
+    uniformLocations[terminatedName] = location;
+    return location;
+}
+
 void Shader::SetUniformMat4f(int location, const glm::mat4& matrix) const {
     program.RequireCurrent();
     if(location >= 0) {
@@ -147,6 +171,20 @@ void Shader::SetUniform1i(int location, int value) const {
     program.RequireCurrent();
     if(location >= 0) {
         glProgramUniform1i(program.GetId(), location, value);
+    }
+}
+
+void Shader::SetUniform1f(int location, float value) const {
+    program.RequireCurrent();
+    if(location >= 0) {
+        glProgramUniform1f(program.GetId(), location, value);
+    }
+}
+
+void Shader::SetUniform4f(int location, const glm::vec4& value) const {
+    program.RequireCurrent();
+    if(location >= 0) {
+        glProgramUniform4fv(program.GetId(), location, 1, glm::value_ptr(value));
     }
 }
 
