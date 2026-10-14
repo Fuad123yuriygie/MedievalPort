@@ -137,6 +137,7 @@ struct FileParser::State {
     SceneLighting lighting;
     TextureResidency textures;
     std::unordered_map<std::string, std::shared_ptr<GpuMesh>> meshCache;
+    std::vector<std::shared_ptr<GpuMesh>> retiredMeshes;
     std::unordered_map<std::string, std::uint64_t> meshFingerprints;
     std::unordered_map<std::string, FailedAsset> failedAssets;
     std::unordered_map<std::string, ModelId> pendingAssets; // asset key -> requesting requestId
@@ -188,6 +189,17 @@ struct FileParser::State {
         }
     }
 
+    void CollectRetiredMeshes() {
+        std::erase_if(retiredMeshes, [this](const auto& mesh) {
+            if(mesh.use_count() != 1) {
+                return false;
+            }
+            ReleaseKeys(mesh->textureKeys);
+            return true;
+        });
+        textures.TrimUnused();
+    }
+
     void ReleaseUploadKeys() {
         if(uploadJob) {
             ReleaseKeys(uploadJob->acquiredKeys);
@@ -202,11 +214,16 @@ struct FileParser::State {
             if(model.assetKey != assetKey || model.mesh) {
                 continue;
             }
-            const auto worldBounds = TransformBounds(mesh->bounds, model.modelMatrix);
-            model.mesh = mesh;
-            model.localBounds = mesh->bounds;
-            model.worldBounds = worldBounds;
-            model.error.clear();
+            try {
+                const auto worldBounds = TransformBounds(mesh->bounds, model.modelMatrix);
+                model.mesh = mesh;
+                model.localBounds = mesh->bounds;
+                model.worldBounds = worldBounds;
+                model.error.clear();
+            } catch(const std::invalid_argument& error) {
+                // Real bounds can reject a transform accepted while this instance was loading.
+                model.error = error.what();
+            }
         }
         viewCacheDirty = true;
     }
@@ -379,11 +396,11 @@ bool FileParser::QueueModelLoad(ModelDescription description) {
                 model.worldBounds = TransformBounds(cached->second->bounds, matrix);
             }
             else {
-                // The source changed on disk; drop the stale asset and re-import below.
-                state->ReleaseKeys(cached->second->textureKeys);
+                // Existing instances keep this mesh version and its texture references.
+                state->retiredMeshes.push_back(std::move(cached->second));
                 state->meshCache.erase(cached);
                 state->meshFingerprints.erase(assetKey);
-                state->textures.TrimUnused();
+                state->CollectRetiredMeshes();
             }
         }
         if(!model.mesh) {
@@ -541,15 +558,28 @@ bool FileParser::UpdateTransform(ModelId id, const glm::vec3& position, const gl
             description.scale = scale;
             const auto matrix = MakeModelMatrix(description);
             const auto normalMatrix = MakeNormalMatrix(matrix);
-            const auto worldBounds = TransformBounds(model.localBounds, matrix);
+            auto mesh = model.mesh;
+            if(!mesh) {
+                if(const auto cached = state->meshCache.find(model.assetKey);
+                   cached != state->meshCache.end()) {
+                    mesh = cached->second;
+                }
+            }
+            const auto localBounds = mesh ? mesh->bounds : model.localBounds;
+            const auto worldBounds = TransformBounds(localBounds, matrix);
             const bool mirrored = IsMirrored(scale);
             model.description.position = position;
             model.description.rotation = rotation;
             model.description.scale = scale;
             model.modelMatrix = matrix;
             model.normalMatrix = normalMatrix;
+            model.localBounds = localBounds;
             model.worldBounds = worldBounds;
             model.mirrored = mirrored;
+            model.mesh = std::move(mesh);
+            if(model.mesh) {
+                model.error.clear();
+            }
             state->viewCacheDirty = true;
             state->MarkDirty();
             return true;
@@ -592,8 +622,8 @@ bool FileParser::RemoveModel(ModelId id) {
             s.meshCache.erase(cached);
             s.meshFingerprints.erase(assetKey);
         }
-        s.textures.TrimUnused();
     }
+    s.CollectRetiredMeshes();
     s.viewCacheDirty = true;
     s.MarkDirty();
     return true;
@@ -737,6 +767,7 @@ void FileParser::Shutdown() noexcept {
     state->uploadJob.reset();
     state->models.clear();
     state->meshCache.clear();
+    state->retiredMeshes.clear();
     state->meshFingerprints.clear();
     state->failedAssets.clear();
     state->pendingAssets.clear();

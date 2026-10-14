@@ -27,16 +27,13 @@ void Editor::UpdateGUI() {
         ImGui::Separator();
         // Explicit persistence while the application is still fully operational.
         if(ImGui::Button("Save Scene")) {
-            if(Assets().SaveScene()) {
-                saveStatus = "Scene saved";
-            }
-            else {
-                saveStatus = "Save failed - previous file kept";
-            }
+            saveFailed = !Assets().SaveScene();
         }
         ImGui::SameLine();
-        ImGui::TextUnformatted(Assets().IsDirty() ? "Unsaved changes"
-                                                   : (saveStatus.empty() ? "Saved" : saveStatus.c_str()));
+        ImGui::TextUnformatted(Assets().IsDirty() ? "Unsaved changes" : "Saved");
+        if(saveFailed) {
+            ImGui::TextWrapped("Save failed - previous file kept");
+        }
         ImGui::Separator();
         if(ImGui::CollapsingHeader("Scene Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto lighting = Assets().GetLighting();

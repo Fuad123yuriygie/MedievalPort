@@ -4,7 +4,6 @@
 #include "io/SceneTypes.h"
 
 #include <optional>
-#include <string>
 
 class Editor final : public Application {
 public:
@@ -15,6 +14,6 @@ protected:
 
 private:
     std::optional<ModelId> selectedModel;
-    std::string saveStatus;
+    bool saveFailed = false;
     bool lightingEditRejected = false;
 };

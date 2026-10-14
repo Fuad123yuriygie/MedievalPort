@@ -387,6 +387,91 @@ void TestTexturePages(const GraphicsContext& context, const std::filesystem::pat
     for(const GLuint page : pages) {
         Check(glIsTexture(page) == GL_FALSE, "Shared texture page was leaked");
     }
+
+    const auto reimportPath = directory / "reimport.obj";
+    const std::string geometry =
+        "mtllib colors.mtl\nv -0.5 -0.5 0\nv 0.5 -0.5 0\nv 0 0.5 0\n";
+    Write(reimportPath, geometry + "usemtl red\nf 1 2 3\n");
+    settings.textureLayersPerPage = 1;
+    FileParser reimported(context, root / "reimport.json", settings);
+    reimported.LoadSavedFiles();
+    Check(reimported.LoadAsset(reimportPath) && reimported.LoadAsset(reimportPath),
+          "Reimport fixture could not queue the old instances");
+    WaitForModels(reimported, 2);
+    const ModelId firstOld = reimported.GetModelViews()[0].id;
+    const ModelId lastOld = reimported.GetModelViews()[1].id;
+    draws = reimported.BuildDrawList(glm::mat4(1.0f));
+    Check(draws.size() == 2 && draws[0].textureArray == draws[1].textureArray &&
+              draws[0].vertexArray == draws[1].vertexArray,
+          "Old instances did not share their cached mesh and texture");
+    const GLuint oldTexture = draws.front().textureArray->GetId();
+    const GLuint oldArray = draws.front().vertexArray->GetId();
+    const auto checkColor = [](GLuint texture, const std::array<unsigned char, 4>& expected) {
+        std::array<unsigned char, 4> pixel{};
+        glGetTextureSubImage(texture, 0, 0, 0, 0, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                             static_cast<GLsizei>(pixel.size()), pixel.data());
+        Check(pixel == expected, "Reimport changed an instance's texture color");
+    };
+    checkColor(oldTexture, {255, 0, 0, 255});
+    const auto originalSize = std::filesystem::file_size(reimportPath);
+    Write(reimportPath, geometry + "usemtl blue\nf 1 2 3\n# replacement version\n");
+    Check(std::filesystem::file_size(reimportPath) != originalSize,
+          "Reimport fixture did not change the asset fingerprint");
+    Check(reimported.LoadAsset(reimportPath), "Changed OBJ could not be queued again");
+    // Check scalar IDs before rebuilding or dereferencing any borrowed draw pointers.
+    Check(glIsTexture(oldTexture) == GL_TRUE,
+          "Reimport released a texture still referenced by old instances");
+    Check(glIsVertexArray(oldArray) == GL_TRUE, "Reimport released the old instances' mesh");
+    checkColor(oldTexture, {255, 0, 0, 255});
+    draws = reimported.BuildDrawList(glm::mat4(1.0f));
+    Check(draws.size() == 2, "Old instances disappeared while their replacement was loading");
+    WaitForModels(reimported, 3);
+    draws = reimported.BuildDrawList(glm::mat4(1.0f));
+    Check(draws.size() == 3, "Replacement did not coexist with both old instances");
+    const auto replacement = std::find_if(draws.begin(), draws.end(), [oldArray](const auto& draw) {
+        return draw.vertexArray->GetId() != oldArray;
+    });
+    Check(replacement != draws.end(), "Reimport reused the superseded mesh");
+    const GLuint newTexture = replacement->textureArray->GetId();
+    const GLuint newArray = replacement->vertexArray->GetId();
+    Check(newTexture != oldTexture &&
+              std::count_if(draws.begin(), draws.end(), [oldTexture](const auto& draw) {
+                  return draw.textureArray->GetId() == oldTexture;
+              }) == 2,
+          "Replacement changed the texture of an already-loaded instance");
+    checkColor(oldTexture, {255, 0, 0, 255});
+    checkColor(newTexture, {0, 0, 255, 255});
+
+    auto oldDescription = *reimported.GetDescription(lastOld);
+    oldDescription.position.x = 0.1f;
+    Check(reimported.UpdateTransform(lastOld, oldDescription),
+          "Could not edit an instance of the retired mesh");
+    draws = reimported.BuildDrawList(glm::mat4(1.0f));
+    Check(draws.size() == 3 &&
+              std::count_if(draws.begin(), draws.end(), [oldArray](const auto& draw) {
+                  return draw.vertexArray->GetId() == oldArray;
+              }) == 2,
+          "Transform editing replaced an already-loaded instance's mesh version");
+
+    Check(reimported.RemoveModel(firstOld), "Could not remove the first old instance");
+    Check(glIsTexture(oldTexture) == GL_TRUE && glIsVertexArray(oldArray) == GL_TRUE,
+          "Removing one old instance reclaimed a mesh still in use");
+    draws = reimported.BuildDrawList(glm::mat4(1.0f));
+    Check(draws.size() == 2, "Removing one old instance invalidated another instance");
+    checkColor(oldTexture, {255, 0, 0, 255});
+    Check(reimported.RemoveModel(lastOld), "Could not remove the last old instance");
+    Check(glIsTexture(oldTexture) == GL_FALSE && glIsVertexArray(oldArray) == GL_FALSE,
+          "Last old instance removal retained its retired mesh or texture page");
+    Check(glIsTexture(newTexture) == GL_TRUE && glIsVertexArray(newArray) == GL_TRUE,
+          "Retired mesh collection invalidated the current mesh");
+    draws = reimported.BuildDrawList(glm::mat4(1.0f));
+    Check(draws.size() == 1 && draws.front().textureArray->GetId() == newTexture &&
+              draws.front().vertexArray->GetId() == newArray,
+          "The replacement did not remain renderable after old instance removal");
+    checkColor(newTexture, {0, 0, 255, 255});
+    reimported.Shutdown();
+    Check(glIsTexture(newTexture) == GL_FALSE && glIsVertexArray(newArray) == GL_FALSE,
+          "Reimported resources survived shutdown");
     CheckGl();
 }
 
@@ -1065,6 +1150,135 @@ void TestCachedNormalTransforms(const GraphicsContext& context, const std::files
           "Visible zero-Z-scale instance retained stale normals or winding");
     Check(assets.SaveScene() && !assets.IsDirty(), "Could not save legal zero-scale fixture");
     assets.Shutdown();
+
+    ModelDescription oversized;
+    oversized.filePath = PathToUtf8(modelPath);
+    oversized.scale.x = std::numeric_limits<float>::max();
+    auto healthy = oversized;
+    healthy.scale = glm::vec3(0.25f);
+    const auto waitForBoundsFailure = [](FileParser& pending) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while(std::chrono::steady_clock::now() < deadline) {
+            pending.ProcessPendingModels();
+            const auto& views = pending.GetModelViews();
+            Check(views.size() == 2 && views[1].error.empty(),
+                  "Deferred bounds failure affected the healthy sibling");
+            if(!views[0].loaded && !views[0].error.empty() && views[1].loaded) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        Check(false, "Deferred bounds validation did not finish per instance");
+    };
+    for(const bool correct : {false, true}) {
+        const auto restorePath = root / (correct ? "corrected-bounds.json" : "deferred-bounds.json");
+        SceneDocument deferred;
+        deferred.models = {oversized, healthy};
+        const ConfigManager config(restorePath);
+        Check(config.SaveScene(deferred), "Could not prepare deferred bounds fixture");
+        const auto originalBytes = ReadText(restorePath);
+        FileParser restored(context, restorePath, settings);
+        restored.LoadSavedFiles();
+        const ModelId oversizedId = restored.GetModelViews().front().id;
+        waitForBoundsFailure(restored);
+        const auto failed = restored.GetModelViews().front();
+        Check(failed.description.filePath == oversized.filePath &&
+                  failed.description.position == oversized.position &&
+                  failed.description.rotation == oversized.rotation &&
+                  failed.description.scale == oversized.scale && !restored.IsDirty() &&
+                  ReadText(restorePath) == originalBytes,
+              "Deferred bounds failure changed the authored description or clean scene");
+        auto draws = restored.BuildDrawList(glm::mat4(1.0f));
+        Check(draws.size() == 1 &&
+                  draws.front().modelViewProjection == MakeModelMatrix(healthy) &&
+                  draws.front().normalMatrix == MakeNormalMatrix(MakeModelMatrix(healthy)),
+              "The healthy sibling did not retain its renderable transform");
+        const GLuint cachedArray = draws.front().vertexArray->GetId();
+        const GLuint cachedTexture = draws.front().textureArray->GetId();
+        if(correct) {
+            auto stillInvalid = oversized;
+            stillInvalid.position.x = 0.2f;
+            stillInvalid.scale.x = -std::numeric_limits<float>::max();
+            Check(!restored.UpdateTransform(oversizedId, stillInvalid),
+                  "Unattached instance accepted an edit that overflows the cached mesh bounds");
+            const auto unchanged = restored.GetModelViews().front();
+            Check(unchanged.description.filePath == failed.description.filePath &&
+                      unchanged.description.position == failed.description.position &&
+                      unchanged.description.rotation == failed.description.rotation &&
+                      unchanged.description.scale == failed.description.scale &&
+                      unchanged.error == failed.error && !unchanged.loaded && !restored.IsDirty(),
+                  "Rejected deferred edit partially committed the description, error or dirty state");
+            draws = restored.BuildDrawList(glm::mat4(1.0f));
+            Check(draws.size() == 1 && draws.front().vertexArray->GetId() == cachedArray &&
+                      draws.front().modelViewProjection == MakeModelMatrix(healthy),
+                  "Rejected deferred edit changed mesh attachment or the healthy sibling");
+
+            // A correction must attach the cached mesh immediately, even without its source file.
+            const auto offlinePath = root / "cached-normals-offline.obj";
+            std::filesystem::rename(modelPath, offlinePath);
+            auto corrected = healthy;
+            corrected.position.x = 0.1f;
+            corrected.rotation.z = 15.0f;
+            corrected.scale.x = -0.2f;
+            Check(restored.UpdateTransform(oversizedId, corrected) && restored.IsDirty(),
+                  "Valid deferred bounds correction was rejected");
+            const auto& correctedView = restored.GetModelViews().front();
+            Check(correctedView.loaded && correctedView.error.empty(),
+                  "Corrective transform did not attach the cached mesh and clear its error");
+            draws = restored.BuildDrawList(glm::mat4(1.0f));
+            const auto correctedMatrix = MakeModelMatrix(corrected);
+            Check(draws.size() == 2 &&
+                      std::all_of(draws.begin(), draws.end(), [cachedArray](const auto& draw) {
+                          return draw.vertexArray->GetId() == cachedArray;
+                      }) &&
+                      std::any_of(draws.begin(), draws.end(), [&](const auto& draw) {
+                          return draw.modelViewProjection == correctedMatrix && draw.mirrored &&
+                                 draw.normalMatrix == MakeNormalMatrix(correctedMatrix);
+                      }),
+                  "Correction reimported the mesh or retained stale cached transforms");
+            Check(restored.SaveScene() && !restored.IsDirty(),
+                  "Corrected instance could not be saved normally");
+            const auto saved = config.LoadScene();
+            Check(saved.models.size() == 2 && saved.models[0].position == corrected.position &&
+                      saved.models[0].rotation == corrected.rotation &&
+                      saved.models[0].scale == corrected.scale &&
+                      saved.models[1].scale == healthy.scale,
+                  "Saving the correction changed or lost an instance");
+            std::filesystem::rename(offlinePath, modelPath);
+        }
+        const auto beforeShutdown = ReadText(restorePath);
+        restored.Shutdown();
+        Check(!restored.IsDirty() && ReadText(restorePath) == beforeShutdown &&
+                  (correct || beforeShutdown == originalBytes),
+              "Clean shutdown rewrote the deferred-bounds scene");
+        Check(glIsVertexArray(cachedArray) == GL_FALSE && glIsTexture(cachedTexture) == GL_FALSE,
+              "Deferred-bounds fixture leaked cached GPU resources");
+    }
+
+    FileParser pending(context, root / "pending-bounds.json", settings);
+    pending.LoadSavedFiles();
+    Check(pending.LoadAsset(modelPath) && pending.LoadAsset(modelPath),
+          "Could not queue the pre-upload bounds fixture");
+    const ModelId pendingId = pending.GetModelViews().front().id;
+    Check(!pending.GetModelViews().front().loaded && pending.UpdateTransform(pendingId, oversized),
+          "Extreme transform was not accepted against the pre-upload placeholder bounds");
+    waitForBoundsFailure(pending);
+    Check(pending.IsDirty() && pending.GetDescription(pendingId)->scale == oversized.scale,
+          "Deferred validation lost or clamped an authored pre-upload edit");
+    auto collapsed = healthy;
+    collapsed.scale.z = 0.0f;
+    Check(pending.UpdateTransform(pendingId, collapsed) && pending.GetModelViews().front().loaded &&
+              pending.GetModelViews().front().error.empty(),
+          "Legal zero scale could not correct an unattached instance");
+    const auto collapsedDraws = pending.BuildDrawList(glm::mat4(1.0f));
+    Check(collapsedDraws.size() == 2 &&
+              std::any_of(collapsedDraws.begin(), collapsedDraws.end(), [&](const auto& draw) {
+                  return draw.modelViewProjection == MakeModelMatrix(collapsed) &&
+                         draw.normalMatrix == glm::mat3(0.0f) && !draw.mirrored;
+              }),
+          "Pre-upload correction retained invalid normals or bounds");
+    Check(pending.SaveScene() && !pending.IsDirty(), "Could not save the pre-upload correction");
+    pending.Shutdown();
     CheckGl();
 }
 
