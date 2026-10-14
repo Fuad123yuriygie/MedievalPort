@@ -14,6 +14,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -543,14 +544,24 @@ void TestImporter(const std::filesystem::path& root) {
 void TestConfig(const std::filesystem::path& root) {
     const auto path = root / "scene.json";
     const ConfigManager config(path);
-    Check(config.LoadObjectFromJson().empty(), "Missing config is not an empty scene");
+    const SceneDocument empty;
+    const auto missing = config.LoadScene();
+    Check(missing.models.empty() && missing.lighting == empty.lighting,
+          "Missing config is not an empty scene with default-enabled lighting");
+    Check(!std::filesystem::exists(path), "Loading a missing scene created a file");
     WriteFile(path, "null\n");
-    Check(config.LoadObjectFromJson().empty(), "Legacy null empty scene was rejected");
+    const auto legacyNull = config.LoadScene();
+    Check(legacyNull.models.empty() && legacyNull.lighting == empty.lighting,
+          "Legacy null empty scene lost default-enabled lighting");
     Check(ReadFile(path) == "null\n", "Loading a legacy empty scene modified it");
-    const std::vector<ModelDescription> empty;
-    Check(config.SaveObject(empty), "Cannot save empty scene");
+    Check(config.SaveScene(empty), "Cannot save empty scene");
     Check(ReadFile(path).find("\"model\": []") != std::string::npos, "Empty scene schema changed");
-    Check(config.LoadObjectFromJson().empty(), "Empty config round-trip failed");
+    const auto loadedEmpty = config.LoadScene();
+    Check(loadedEmpty.models.empty() && loadedEmpty.lighting == empty.lighting,
+          "Empty config round-trip lost lighting defaults");
+    const auto emptyJson = nlohmann::json::parse(ReadFile(path));
+    Check(emptyJson.at("lighting").size() == 5 && emptyJson.at("lighting").at("enabled") == true,
+          "Saving an empty scene did not serialize explicit lighting");
     auto first = Describe(root / "not-yet-loaded.obj");
     first.position = {1.25f, -2.0f, 3.0f};
     first.rotation = {0.5f, 1.0f, -4.0f};
@@ -559,57 +570,141 @@ void TestConfig(const std::filesystem::path& root) {
     second.position = {8.0f, 9.0f, 10.0f};
     second.rotation = {-1.0f, -2.0f, -3.0f};
     second.scale = {1.0f, 2.0f, 3.0f};
-    std::vector<ModelDescription> descriptions{first, second};
-    Check(config.SaveObject(descriptions), "Cannot atomically replace existing config");
-    const auto loaded = config.LoadObjectFromJson();
-    Check(loaded.size() == descriptions.size(), "Duplicate paths were merged");
-    for(std::size_t i = 0; i < loaded.size(); ++i) {
-        Check(loaded[i].filePath == descriptions[i].filePath &&
-                  Equal(loaded[i].position, descriptions[i].position) &&
-                  Equal(loaded[i].rotation, descriptions[i].rotation) &&
-                  Equal(loaded[i].scale, descriptions[i].scale),
+    SceneDocument scene;
+    scene.models = {first, second};
+    scene.lighting.direction = {0, -3, -4};
+    scene.lighting.color = {0.25f, 0.5f, 0.75f};
+    scene.lighting.intensity = 3.0f;
+    scene.lighting.ambientStrength = 0.125f;
+    const auto expectedLighting = ValidateSceneLighting(scene.lighting);
+    Check(config.SaveScene(scene), "Cannot atomically replace existing config");
+    Check(scene.lighting.direction == glm::vec3(0, -3, -4), "Saving modified the caller's direction");
+    const auto loaded = config.LoadScene();
+    Check(loaded.lighting == expectedLighting, "Lighting round-trip changed values or lost normalization");
+    Check(loaded.models.size() == scene.models.size(), "Duplicate paths were merged");
+    for(std::size_t i = 0; i < loaded.models.size(); ++i) {
+        Check(loaded.models[i].filePath == scene.models[i].filePath &&
+                  Equal(loaded.models[i].position, scene.models[i].position) &&
+                  Equal(loaded.models[i].rotation, scene.models[i].rotation) &&
+                  Equal(loaded.models[i].scale, scene.models[i].scale),
               "Model transform round-trip changed values");
     }
+    scene.lighting.enabled = false;
+    Check(config.SaveScene(scene), "Cannot save disabled lighting with models");
+    const auto disabled = config.LoadScene();
+    Check(!disabled.lighting.enabled && disabled.models.size() == 2 &&
+              disabled.lighting.direction == expectedLighting.direction,
+          "Explicit unlit mode was not preserved with models");
+    SceneDocument unlitEmpty;
+    unlitEmpty.lighting = disabled.lighting;
+    Check(config.SaveScene(unlitEmpty), "Cannot save an unlit empty scene");
+    const auto loadedUnlitEmpty = config.LoadScene();
+    Check(loadedUnlitEmpty.models.empty() && loadedUnlitEmpty.lighting == unlitEmpty.lighting,
+          "Unlit empty scene round-trip lost authored lighting");
+    unlitEmpty.lighting.direction = {-0.6190559f, -0.823850751f, -0.694954455f};
+    unlitEmpty.lighting = ValidateSceneLighting(unlitEmpty.lighting);
+    for(int iteration = 0; iteration < 4; ++iteration) {
+        Check(config.SaveScene(unlitEmpty) && config.LoadScene().lighting == unlitEmpty.lighting,
+              "Repeated persistence drifted normalized lighting state");
+    }
+    scene.lighting.enabled = true;
+    Check(config.SaveScene(scene), "Cannot restore the populated scene");
+
+    auto legacy = nlohmann::json::parse(ReadFile(path));
+    legacy.erase("lighting");
+    const auto legacyText = legacy.dump();
+    WriteFile(path, legacyText);
+    const auto migrated = config.LoadScene();
+    Check(migrated.models.size() == 2 && migrated.lighting == empty.lighting &&
+              Equal(migrated.models[0].scale, first.scale),
+          "Absent lighting did not migrate models to a default-enabled sun");
+    Check(ReadFile(path) == legacyText, "Loading an old model-only scene rewrote it");
+    WriteFile(path, R"({"model":[]})");
+    Check(config.LoadScene().lighting == empty.lighting, "Legacy empty model array lost default lighting");
+    Check(ReadFile(path) == R"({"model":[]})", "Loading an old empty scene rewrote it");
+    Check(config.SaveScene(scene), "Cannot restore scene after migration tests");
+
     const auto unicodeConfigPath = root / std::filesystem::path(u8"sc\u00e8ne-\u573a\u666f.json");
     const ConfigManager unicodeConfig(unicodeConfigPath);
     auto unicodeDescription = first;
     unicodeDescription.filePath =
         PathToUtf8(root / std::filesystem::path(u8"caf\u00e9-\u6a21\u578b.obj"));
-    const std::vector<ModelDescription> unicodeDescriptions{unicodeDescription};
-    Check(unicodeConfig.SaveObject(unicodeDescriptions),
+    SceneDocument unicodeScene;
+    unicodeScene.models = {unicodeDescription};
+    unicodeScene.lighting = expectedLighting;
+    Check(unicodeConfig.SaveScene(unicodeScene) && unicodeConfig.SaveScene(unicodeScene),
           "Cannot save configuration using non-ASCII paths");
-    const auto unicodeLoaded = unicodeConfig.LoadObjectFromJson();
-    Check(unicodeLoaded.size() == 1 && unicodeLoaded[0].filePath == unicodeDescription.filePath &&
-              Equal(unicodeLoaded[0].scale, unicodeDescription.scale),
+    const auto unicodeLoaded = unicodeConfig.LoadScene();
+    Check(unicodeLoaded.models.size() == 1 && unicodeLoaded.models[0].filePath == unicodeDescription.filePath &&
+              Equal(unicodeLoaded.models[0].scale, unicodeDescription.scale) &&
+              unicodeLoaded.lighting == expectedLighting,
           "UTF-8 config round-trip changed paths or transforms");
     Check(ReadFile(unicodeConfigPath).find(unicodeDescription.filePath) != std::string::npos,
           "Persisted path is not UTF-8 JSON text");
     WriteFile(
         unicodeConfigPath,
         R"({"model":[{"filePath":"caf\u00e9-\u6a21\u578b.obj","position":[0,0,0],"rotation":[0,0,0],"scale":[1,1,1]}]})");
-    const auto escapedUnicode = unicodeConfig.LoadObjectFromJson();
-    Check(escapedUnicode.size() == 1 &&
-              escapedUnicode[0].filePath ==
+    const auto escapedUnicode = unicodeConfig.LoadScene();
+    Check(escapedUnicode.models.size() == 1 && escapedUnicode.lighting == empty.lighting &&
+              escapedUnicode.models[0].filePath ==
                   PathToUtf8(std::filesystem::path(u8"caf\u00e9-\u6a21\u578b.obj")),
           "Escaped JSON path did not decode to UTF-8");
     const auto previous = ReadFile(path);
-    descriptions[0].position.x = std::numeric_limits<float>::quiet_NaN();
-    Check(!config.SaveObject(descriptions), "Config saved a nonfinite transform");
+    scene.models[0].position.x = std::numeric_limits<float>::quiet_NaN();
+    Check(!config.SaveScene(scene), "Config saved a nonfinite transform");
     Check(ReadFile(path) == previous, "Failed save replaced the previous config");
-    descriptions[0] = first;
-    descriptions[0].filePath.clear();
-    Check(!config.SaveObject(descriptions), "Config saved an empty file path");
-    descriptions[0].filePath = std::string("bad\0path.obj", 12);
-    Check(!config.SaveObject(descriptions), "Config saved an embedded NUL file path");
+    scene.models[0] = first;
+    scene.models[0].filePath.clear();
+    Check(!config.SaveScene(scene), "Config saved an empty file path");
+    scene.models[0].filePath = std::string("bad\0path.obj", 12);
+    Check(!config.SaveScene(scene), "Config saved an embedded NUL file path");
     Check(ReadFile(path) == previous, "Invalid path save replaced the previous config");
-    Check(!ConfigManager(root / "missing-parent" / "scene.json").SaveObject(empty),
+    scene.models[0] = first;
+    const auto rejectSave = [&](const SceneLighting& invalidLighting) {
+        auto invalid = scene;
+        invalid.lighting = invalidLighting;
+        Check(!config.SaveScene(invalid), "Config saved invalid lighting");
+        Check(ReadFile(path) == previous, "Failed lighting save replaced the previous config");
+    };
+    auto invalidLighting = expectedLighting;
+    invalidLighting.enabled = false;
+    invalidLighting.direction = glm::vec3(0.0f);
+    rejectSave(invalidLighting);
+    for(const float bad : {std::numeric_limits<float>::quiet_NaN(),
+                           std::numeric_limits<float>::infinity(),
+                           -std::numeric_limits<float>::infinity()}) {
+        invalidLighting = expectedLighting;
+        invalidLighting.direction.x = bad;
+        rejectSave(invalidLighting);
+        invalidLighting = expectedLighting;
+        invalidLighting.color.y = bad;
+        rejectSave(invalidLighting);
+        invalidLighting = expectedLighting;
+        invalidLighting.intensity = bad;
+        rejectSave(invalidLighting);
+        invalidLighting = expectedLighting;
+        invalidLighting.ambientStrength = bad;
+        rejectSave(invalidLighting);
+    }
+    for(const float bad : {-std::numeric_limits<float>::denorm_min(), std::nextafter(1.0f, 2.0f)}) {
+        invalidLighting = expectedLighting;
+        invalidLighting.color.z = bad;
+        rejectSave(invalidLighting);
+        invalidLighting = expectedLighting;
+        invalidLighting.ambientStrength = bad;
+        rejectSave(invalidLighting);
+        invalidLighting = expectedLighting;
+        invalidLighting.intensity = bad * 4.0f;
+        rejectSave(invalidLighting);
+    }
+    Check(!ConfigManager(root / "missing-parent" / "scene.json").SaveScene(empty),
           "Save to missing parent reported success");
     const auto directory = root / "directory-target";
     WriteFile(directory / "sentinel", "keep me");
-    Check(!ConfigManager(directory).SaveObject(empty), "Save over a directory reported success");
+    Check(!ConfigManager(directory).SaveScene(empty), "Save over a directory reported success");
     Check(ReadFile(directory / "sentinel") == "keep me",
           "Failed replacement removed existing target data");
-    CheckThrows([&] { ConfigManager(directory).LoadObjectFromJson(); },
+    CheckThrows([&] { ConfigManager(directory).LoadScene(); },
                 "Directory loaded as empty config");
     CheckThrows([] { ConfigManager(std::filesystem::path{}); }, "Empty config path accepted");
 
@@ -625,10 +720,109 @@ void TestConfig(const std::filesystem::path& root) {
         R"({"model":[{"filePath":"x.obj","position":[0,0,0],"rotation":[0,0,0],"scale":null}]})"};
     for(const auto& text : malformed) {
         WriteFile(path, text);
-        CheckThrows([&] { config.LoadObjectFromJson(); }, "Malformed configuration accepted");
+        CheckThrows([&] { config.LoadScene(); }, "Malformed configuration accepted");
         Check(ReadFile(path) == text, "Loading malformed JSON modified it");
     }
-    Check(config.SaveObject(empty) && config.LoadObjectFromJson().empty(),
+
+    const nlohmann::json validLighting = {
+        {"enabled", true}, {"direction", {0, -3, -4}}, {"color", {0.25, 0.5, 0.75}},
+        {"intensity", 3}, {"ambientStrength", 0.125}};
+    const auto rejectLoad = [&](const nlohmann::json& lighting) {
+        const nlohmann::json document = {{"model", nlohmann::json::array()}, {"lighting", lighting}};
+        const auto text = document.dump();
+        WriteFile(path, text);
+        CheckThrows([&] { config.LoadScene(); }, "Malformed explicit lighting was accepted");
+        Check(ReadFile(path) == text, "Rejected lighting load changed the original bytes");
+    };
+    for(const auto& invalid : {nlohmann::json(nullptr), nlohmann::json(false), nlohmann::json(1),
+                               nlohmann::json("sun"), nlohmann::json::array(), nlohmann::json::object()}) {
+        rejectLoad(invalid);
+    }
+    for(const char* field : {"enabled", "direction", "color", "intensity", "ambientStrength"}) {
+        auto incomplete = validLighting;
+        incomplete.erase(field);
+        rejectLoad(incomplete);
+        for(const auto& invalid : {nlohmann::json(nullptr), nlohmann::json("0"),
+                                   nlohmann::json::array(), nlohmann::json::object()}) {
+            auto mistyped = validLighting;
+            mistyped[field] = invalid;
+            rejectLoad(mistyped);
+        }
+    }
+    for(const char* field : {"direction", "color"}) {
+        for(const auto& invalid : {nlohmann::json({0, 1}), nlohmann::json({0, 1, 0, 1}),
+                                   nlohmann::json({0, false, 1}), nlohmann::json({0, "1", 1}),
+                                   nlohmann::json(1)}) {
+            auto mistyped = validLighting;
+            mistyped[field] = invalid;
+            rejectLoad(mistyped);
+        }
+    }
+    for(const char* field : {"intensity", "ambientStrength"}) {
+        auto mistyped = validLighting;
+        mistyped[field] = false;
+        rejectLoad(mistyped);
+        const double maximum = std::string_view(field) == "intensity" ? 4.0 : 1.0;
+        for(const double bad : {-1e-50, std::nextafter(maximum, 5.0), 1e40}) {
+            auto outOfRange = validLighting;
+            outOfRange[field] = bad;
+            rejectLoad(outOfRange);
+        }
+    }
+    auto numericEnabled = validLighting;
+    numericEnabled["enabled"] = 1;
+    rejectLoad(numericEnabled);
+    for(int axis = 0; axis < 3; ++axis) {
+        for(const double bad : {-1e-50, std::nextafter(1.0, 2.0), 1e40}) {
+            auto outOfRange = validLighting;
+            outOfRange["color"][axis] = bad;
+            rejectLoad(outOfRange);
+        }
+    }
+    for(const auto& direction : {nlohmann::json({0, 0, 0}), nlohmann::json({1e40, 0, 0}),
+                                 nlohmann::json({1e-100, 0, 0})}) {
+        auto invalid = validLighting;
+        invalid["enabled"] = false;
+        invalid["direction"] = direction;
+        rejectLoad(invalid);
+    }
+    WriteFile(path,
+              R"({"model":[],"lighting":{"enabled":true,"direction":[1e309,0,0],"color":[1,1,1],"intensity":1,"ambientStrength":0}})");
+    const auto overflowing = ReadFile(path);
+    CheckThrows([&] { config.LoadScene(); }, "Overflowing JSON lighting number was accepted");
+    Check(ReadFile(path) == overflowing, "Overflowing JSON lighting load changed the original bytes");
+
+    for(const auto& direction : {nlohmann::json({0, -30, -40}), nlohmann::json({3e38, -3e38, 0}),
+                                 nlohmann::json({1.4e-45, -1.4e-45, 0})}) {
+        auto lighting = validLighting;
+        lighting["direction"] = direction;
+        const nlohmann::json document = {{"model", nlohmann::json::array()}, {"lighting", lighting}};
+        const auto text = document.dump();
+        WriteFile(path, text);
+        const auto normalized = config.LoadScene();
+        const auto& value = normalized.lighting.direction;
+        const double length = std::sqrt(static_cast<double>(value.x) * value.x +
+                                        static_cast<double>(value.y) * value.y +
+                                        static_cast<double>(value.z) * value.z);
+        Check(std::abs(length - 1.0) < 1e-7 && value.y < 0.0f,
+              "Persisted non-unit or extreme sun direction did not normalize");
+        Check(ReadFile(path) == text, "Normalizing a loaded direction rewrote the file");
+    }
+    for(const int endpoint : {0, 1}) {
+        auto lighting = validLighting;
+        lighting["color"] = {endpoint, endpoint, endpoint};
+        lighting["intensity"] = endpoint * 4;
+        lighting["ambientStrength"] = endpoint;
+        const nlohmann::json document = {{"model", nlohmann::json::array()}, {"lighting", lighting}};
+        WriteFile(path, document.dump());
+        const auto boundary = config.LoadScene();
+        Check(boundary.lighting.intensity == static_cast<float>(endpoint * 4) &&
+                  boundary.lighting.ambientStrength == static_cast<float>(endpoint) &&
+                  boundary.lighting.color == glm::vec3(static_cast<float>(endpoint)),
+              "Inclusive lighting boundary did not load");
+    }
+    Check(config.SaveScene(empty) && config.LoadScene().models.empty() &&
+              config.LoadScene().lighting == empty.lighting,
           "Final empty scene replacement failed");
     for(const auto& entry : std::filesystem::directory_iterator(root)) {
         Check(PathToUtf8(entry.path().filename()).find(".tmp-") == std::string::npos,

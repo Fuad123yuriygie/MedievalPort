@@ -21,6 +21,25 @@ struct ModelDescription {
     glm::vec3 scale{1.0f};
 };
 
+struct SceneLighting {
+    bool enabled = true;
+    // Normalized direction in which light rays travel, not the direction toward the sun.
+    glm::vec3 direction{-0.5773502691896258f};
+    glm::vec3 color{1.0f}; // Linear RGB.
+    float intensity = 0.8f;
+    float ambientStrength = 0.2f;
+
+    bool operator==(const SceneLighting&) const = default;
+};
+
+// Returns a normalized copy, or throws std::invalid_argument for invalid lighting.
+SceneLighting ValidateSceneLighting(SceneLighting lighting);
+
+struct SceneDocument {
+    std::vector<ModelDescription> models;
+    SceneLighting lighting;
+};
+
 struct MeshVertex {
     glm::vec3 position;
     glm::vec3 normal;

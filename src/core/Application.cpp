@@ -56,6 +56,6 @@ void Application::Update(float deltaSeconds) {
 void Application::RenderScene(int width, int height) {
     assets.BuildDrawList(camera.GetProjection() * camera.GetView(), camera.GetPosition(), drawList);
     renderer.BeginScene(width, height);
-    renderer.DrawScene(drawList);
+    renderer.DrawScene(drawList, assets.GetLighting());
     renderer.DrawSkybox(camera.GetView(), camera.GetProjection());
 }

@@ -19,7 +19,7 @@
 #include <chrono>
 #include <cctype>
 #include <glad/glad.h>
-#include <glm/matrix.hpp>
+#include <glm/geometric.hpp>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -76,6 +76,7 @@ struct SceneModel {
     ModelId id = 0;
     ModelDescription description;
     glm::mat4 modelMatrix{1.0f};
+    glm::mat3 normalMatrix{1.0f};
     Bounds localBounds;
     Bounds worldBounds;
     bool mirrored = false;
@@ -133,6 +134,7 @@ struct FileParser::State {
     std::filesystem::path sceneFile;
     ConfigManager config;
     std::vector<SceneModel> models;
+    SceneLighting lighting;
     TextureResidency textures;
     std::unordered_map<std::string, std::shared_ptr<GpuMesh>> meshCache;
     std::unordered_map<std::string, std::uint64_t> meshFingerprints;
@@ -200,9 +202,10 @@ struct FileParser::State {
             if(model.assetKey != assetKey || model.mesh) {
                 continue;
             }
+            const auto worldBounds = TransformBounds(mesh->bounds, model.modelMatrix);
             model.mesh = mesh;
             model.localBounds = mesh->bounds;
-            model.worldBounds = TransformBounds(mesh->bounds, model.modelMatrix);
+            model.worldBounds = worldBounds;
             model.error.clear();
         }
         viewCacheDirty = true;
@@ -327,7 +330,11 @@ FileParser::~FileParser() {
 bool FileParser::LoadAsset(const std::filesystem::path& path) {
     ModelDescription description;
     description.filePath = PathToUtf8(path);
-    return QueueModelLoad(std::move(description));
+    if(!QueueModelLoad(std::move(description))) {
+        return false;
+    }
+    state->MarkDirty();
+    return true;
 }
 
 bool FileParser::QueueModelLoad(ModelDescription description) {
@@ -360,9 +367,10 @@ bool FileParser::QueueModelLoad(ModelDescription description) {
         model.id = id;
         model.description = std::move(description);
         model.modelMatrix = matrix;
+        model.normalMatrix = MakeNormalMatrix(matrix);
         model.assetKey = assetKey;
         model.worldBounds = TransformBounds(model.localBounds, matrix);
-        model.mirrored = glm::determinant(glm::mat3(matrix)) < 0.0f;
+        model.mirrored = IsMirrored(model.description.scale);
 
         if(const auto cached = state->meshCache.find(assetKey); cached != state->meshCache.end()) {
             if(state->meshFingerprints[assetKey] == fingerprint) {
@@ -403,7 +411,6 @@ bool FileParser::QueueModelLoad(ModelDescription description) {
         }
         state->models.push_back(std::move(model));
         state->viewCacheDirty = true;
-        state->MarkDirty();
         return true;
     } catch(const std::exception& error) {
         Log(LogLevel::Error, error.what());
@@ -413,12 +420,12 @@ bool FileParser::QueueModelLoad(ModelDescription description) {
 
 void FileParser::LoadSavedFiles() {
     state->context.RequireCurrent();
-    if(state->savedFilesLoaded) {
+    if(state->savedFilesLoaded || state->stopped) {
         return;
     }
     // Do not enable autosave until every persisted entry has been retained successfully.
-    auto descriptions = state->config.LoadObjectFromJson();
-    for(auto& description : descriptions) {
+    auto document = state->config.LoadScene();
+    for(auto& description : document.models) {
         const auto path = PathFromUtf8(description.filePath);
         if(path.is_relative()) {
             description.filePath = PathToUtf8(state->sceneFile.parent_path() / path);
@@ -428,6 +435,7 @@ void FileParser::LoadSavedFiles() {
                 "Cannot restore the complete scene; the saved configuration is unchanged");
         }
     }
+    state->lighting = document.lighting;
     state->savedFilesLoaded = true;
 }
 
@@ -522,18 +530,26 @@ bool FileParser::UpdateTransform(ModelId id, const glm::vec3& position, const gl
         if(model.id != id) {
             continue;
         }
+        if(model.description.position == position && model.description.rotation == rotation &&
+           model.description.scale == scale) {
+            return true;
+        }
         try {
             ModelDescription description = model.description;
             description.position = position;
             description.rotation = rotation;
             description.scale = scale;
             const auto matrix = MakeModelMatrix(description);
+            const auto normalMatrix = MakeNormalMatrix(matrix);
+            const auto worldBounds = TransformBounds(model.localBounds, matrix);
+            const bool mirrored = IsMirrored(scale);
             model.description.position = position;
             model.description.rotation = rotation;
             model.description.scale = scale;
             model.modelMatrix = matrix;
-            model.worldBounds = TransformBounds(model.localBounds, matrix);
-            model.mirrored = glm::determinant(glm::mat3(matrix)) < 0.0f;
+            model.normalMatrix = normalMatrix;
+            model.worldBounds = worldBounds;
+            model.mirrored = mirrored;
             state->viewCacheDirty = true;
             state->MarkDirty();
             return true;
@@ -583,6 +599,32 @@ bool FileParser::RemoveModel(ModelId id) {
     return true;
 }
 
+const SceneLighting& FileParser::GetLighting() const {
+    state->context.RequireCurrent();
+    return state->lighting;
+}
+
+bool FileParser::UpdateLighting(const SceneLighting& lighting) {
+    state->context.RequireCurrent();
+    if(state->stopped) {
+        return false;
+    }
+    if(lighting == state->lighting) {
+        return true;
+    }
+    try {
+        const auto candidate = ValidateSceneLighting(lighting);
+        if(candidate != state->lighting) {
+            state->lighting = candidate;
+            state->MarkDirty();
+        }
+        return true;
+    } catch(const std::exception& error) {
+        Log(LogLevel::Warning, error.what());
+        return false;
+    }
+}
+
 void FileParser::BuildDrawList(const glm::mat4& viewProjection, const glm::vec3& cameraPosition,
                                std::vector<DrawItem>& out) const {
     state->context.RequireCurrent();
@@ -602,6 +644,7 @@ void FileParser::BuildDrawList(const glm::mat4& viewProjection, const glm::vec3&
             item.textureArray = submesh.texture.textureArray;
             item.objectKey = &model;
             item.modelViewProjection = mvp;
+            item.normalMatrix = model.normalMatrix;
             const auto& material = submesh.material;
             item.baseColor = {material.diffuse.r, material.diffuse.g, material.diffuse.b,
                               material.opacity};
@@ -652,13 +695,17 @@ std::vector<DrawItem> FileParser::BuildDrawList(const glm::mat4& viewProjection)
 
 bool FileParser::SaveScene() const {
     state->context.RequireCurrent();
-    std::vector<ModelDescription> descriptions;
-    descriptions.reserve(state->models.size());
+    if(!state->savedFilesLoaded || state->stopped) {
+        return false;
+    }
+    SceneDocument document;
+    document.lighting = state->lighting;
+    document.models.reserve(state->models.size());
     for(const auto& model : state->models) {
         // Preserve queued/failed descriptions too, including edits made before GPU upload.
-        descriptions.push_back(model.description);
+        document.models.push_back(model.description);
     }
-    if(state->config.SaveObject(descriptions)) {
+    if(state->config.SaveScene(document)) {
         state->dirty = false;
         return true;
     }

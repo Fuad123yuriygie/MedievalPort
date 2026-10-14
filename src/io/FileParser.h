@@ -45,12 +45,16 @@ public:
     bool UpdateTransform(ModelId id, const ModelDescription& description);
     bool RemoveModel(ModelId id);
 
+    const SceneLighting& GetLighting() const;
+    // Invalid edits leave the previous settings intact; valid no-ops do not mark the scene dirty.
+    bool UpdateLighting(const SceneLighting& lighting);
+
     // Writes into caller-owned storage so frame processing does not allocate a fresh draw vector.
     void BuildDrawList(const glm::mat4& viewProjection, const glm::vec3& cameraPosition,
                        std::vector<DrawItem>& out) const;
     std::vector<DrawItem> BuildDrawList(const glm::mat4& viewProjection) const;
 
-    // Explicit persistence. SaveScene clears the dirty flag only when the write succeeds.
+    // SaveScene requires a successful restore and clears dirty only when the write succeeds.
     bool SaveScene() const;
     bool IsDirty() const;
     void Shutdown() noexcept;

@@ -4,21 +4,23 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <glm/mat3x3.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec4.hpp>
 #include <memory>
 #include <span>
 
 class GraphicsContext;
+struct SceneLighting;
 class Shader;
 class SkyboxSystem;
 class TextureArray;
 class VertexArray;
 
-// This renderer is an unlit textured renderer: each draw multiplies a diffuse texture slice by a
-// per-material base color with optional UV transform, wrapping clamp and alpha masking/blending.
-// No lighting model is implemented, so authored lighting properties are reported as unsupported
-// during import rather than silently discarded.
+// Each draw multiplies a diffuse texture slice by a per-material base color with optional UV
+// transform, wrapping clamp and alpha masking/blending. Optional directional Lambert sunlight
+// and scalar ambient fill affect RGB only; imported OBJ ambient/specular material properties
+// remain unsupported and are reported during import.
 
 // Frame-scoped, immutable views. The scene cannot be edited during submission.
 struct DrawItem {
@@ -27,6 +29,7 @@ struct DrawItem {
     // Stable per-instance identity so submeshes of one object do not re-upload its transform.
     const void* objectKey = nullptr;
     glm::mat4 modelViewProjection{1.0f};
+    glm::mat3 normalMatrix{1.0f};
     glm::vec4 baseColor{1.0f, 1.0f, 1.0f, 1.0f};
     glm::vec4 uvTransform{1.0f, 1.0f, 0.0f, 0.0f}; // xy scale, zw offset
     std::uint32_t firstIndex = 0;
@@ -48,7 +51,7 @@ public:
     Renderer& operator=(const Renderer&) = delete;
 
     void BeginScene(int width, int height) const;
-    void DrawScene(std::span<const DrawItem> draws) const;
+    void DrawScene(std::span<const DrawItem> draws, const SceneLighting& lighting) const;
     void DrawSkybox(const glm::mat4& view, const glm::mat4& projection) const;
     void BeginUI() const;
     void Shutdown() noexcept;
@@ -61,10 +64,16 @@ private:
     std::unique_ptr<Shader> shader;
     std::unique_ptr<SkyboxSystem> skybox;
     int mvpLocation = -1;
+    int normalMatrixLocation = -1;
     int layerLocation = -1;
     int baseColorLocation = -1;
     int uvTransformLocation = -1;
     int uvWrapLocation = -1;
     int alphaCutoffLocation = -1;
+    int lightingEnabledLocation = -1;
+    int sunDirectionLocation = -1;
+    int sunColorLocation = -1;
+    int sunIntensityLocation = -1;
+    int ambientStrengthLocation = -1;
     bool outputSrgb = false;
 };

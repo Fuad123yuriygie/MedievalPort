@@ -4,7 +4,9 @@
 
 #include <filesystem>
 #include <functional>
+#include <glm/mat3x3.hpp>
 #include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 #include <string>
 #include <string_view>
@@ -28,8 +30,10 @@ public:
     // Required-interface validation: throws if the uniform is absent or has an unexpected type.
     int RequireUniformLocation(std::string_view name, unsigned expectedType) const;
     void SetUniformMat4f(int location, const glm::mat4& matrix) const;
+    void SetUniformMat3f(int location, const glm::mat3& matrix) const;
     void SetUniform1i(int location, int value) const;
     void SetUniform1f(int location, float value) const;
+    void SetUniform3f(int location, const glm::vec3& value) const;
     void SetUniform4f(int location, const glm::vec4& value) const;
     void SetUniformMat4f(std::string_view name, const glm::mat4& matrix) const;
     void SetUniform1i(std::string_view name, int value) const;

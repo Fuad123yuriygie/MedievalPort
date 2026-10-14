@@ -5,6 +5,7 @@
 #include "graphics/SkyboxSystem.h"
 #include "graphics/TextureArray.h"
 #include "graphics/VertexArray.h"
+#include "io/SceneTypes.h"
 
 #include <glad/glad.h>
 #include <optional>
@@ -16,11 +17,17 @@ Renderer::Renderer(const GraphicsContext& context, const std::filesystem::path& 
       skybox(std::make_unique<SkyboxSystem>(context, assetRoot)) {
     // Validate the interface this renderer depends on instead of silently ignoring -1.
     mvpLocation = shader->RequireUniformLocation("u_MVP", GL_FLOAT_MAT4);
+    normalMatrixLocation = shader->RequireUniformLocation("u_NormalMatrix", GL_FLOAT_MAT3);
     layerLocation = shader->RequireUniformLocation("u_TextureLayer", GL_INT);
     baseColorLocation = shader->RequireUniformLocation("u_BaseColor", GL_FLOAT_VEC4);
     uvTransformLocation = shader->RequireUniformLocation("u_UvTransform", GL_FLOAT_VEC4);
     uvWrapLocation = shader->RequireUniformLocation("u_UvWrap", GL_INT);
     alphaCutoffLocation = shader->RequireUniformLocation("u_AlphaCutoff", GL_FLOAT);
+    lightingEnabledLocation = shader->RequireUniformLocation("u_LightingEnabled", GL_BOOL);
+    sunDirectionLocation = shader->RequireUniformLocation("u_SunDirection", GL_FLOAT_VEC3);
+    sunColorLocation = shader->RequireUniformLocation("u_SunColor", GL_FLOAT_VEC3);
+    sunIntensityLocation = shader->RequireUniformLocation("u_SunIntensity", GL_FLOAT);
+    ambientStrengthLocation = shader->RequireUniformLocation("u_AmbientStrength", GL_FLOAT);
     shader->SetUniform1i(shader->RequireUniformLocation("u_TextureArray", GL_SAMPLER_2D_ARRAY), 0);
     outputSrgb = DetectSrgbFramebuffer();
 }
@@ -80,9 +87,15 @@ void Renderer::BeginScene(int width, int height) const {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
-void Renderer::DrawScene(std::span<const DrawItem> draws) const {
+void Renderer::DrawScene(std::span<const DrawItem> draws, const SceneLighting& lighting) const {
     context.RequireCurrent();
     shader->Bind();
+    // Refresh every field even for disabled lighting or empty submissions to avoid stale state.
+    shader->SetUniform1i(lightingEnabledLocation, lighting.enabled ? 1 : 0);
+    shader->SetUniform3f(sunDirectionLocation, lighting.direction);
+    shader->SetUniform3f(sunColorLocation, lighting.color);
+    shader->SetUniform1f(sunIntensityLocation, lighting.intensity);
+    shader->SetUniform1f(ambientStrengthLocation, lighting.ambientStrength);
     const TextureArray* boundTexture = nullptr;
     const VertexArray* boundVertexArray = nullptr;
     // Winding is established from the first draw of this submission, never assumed from a stale
@@ -129,9 +142,10 @@ void Renderer::DrawScene(std::span<const DrawItem> draws) const {
             draw.vertexArray->Bind();
             boundVertexArray = draw.vertexArray;
         }
-        // Submeshes of one object share its transform, so the MVP is uploaded once per object.
+        // Submeshes of one object share both transforms, uploaded together on object changes.
         if(!haveObject || lastObject != draw.objectKey) {
             shader->SetUniformMat4f(mvpLocation, draw.modelViewProjection);
+            shader->SetUniformMat3f(normalMatrixLocation, draw.normalMatrix);
             lastObject = draw.objectKey;
             haveObject = true;
         }

@@ -1,3 +1,6 @@
+# Ignore AI generated files
+.kilo/
+
 # Ignore build output
 build/
 /build-*/

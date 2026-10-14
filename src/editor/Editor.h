@@ -16,4 +16,5 @@ protected:
 private:
     std::optional<ModelId> selectedModel;
     std::string saveStatus;
+    bool lightingEditRejected = false;
 };

@@ -18,7 +18,7 @@ void Editor::UpdateGUI() {
     }
 
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(350, 500), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(380, 650), ImGuiCond_FirstUseEver);
     if(ImGui::Begin("Model Editor")) {
         const float frameRate = ImGui::GetIO().Framerate;
         ImGui::Text("%.3f ms/frame (%.1f FPS)",
@@ -36,7 +36,29 @@ void Editor::UpdateGUI() {
         }
         ImGui::SameLine();
         ImGui::TextUnformatted(Assets().IsDirty() ? "Unsaved changes"
-                                                  : (saveStatus.empty() ? "Saved" : saveStatus.c_str()));
+                                                   : (saveStatus.empty() ? "Saved" : saveStatus.c_str()));
+        ImGui::Separator();
+        if(ImGui::CollapsingHeader("Scene Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto lighting = Assets().GetLighting();
+            bool changed = ImGui::Checkbox("Enable Lighting", &lighting.enabled);
+            changed |= ImGui::DragFloat3("Ray Direction", glm::value_ptr(lighting.direction), 0.01f);
+            ImGui::TextWrapped("World-space direction rays travel; (0, -1, 0) shines down.");
+            changed |= ImGui::ColorEdit3("Sun Color (Linear)", glm::value_ptr(lighting.color),
+                                         ImGuiColorEditFlags_Float);
+            changed |= ImGui::SliderFloat("Sun Intensity", &lighting.intensity, 0.0f, 4.0f);
+            changed |= ImGui::SliderFloat("Ambient Strength", &lighting.ambientStrength, 0.0f, 1.0f);
+            if(ImGui::Button("Reset Lighting")) {
+                lighting = SceneLighting{};
+                changed = true;
+            }
+            if(changed) {
+                lightingEditRejected = !Assets().UpdateLighting(lighting);
+            }
+            if(lightingEditRejected) {
+                ImGui::TextWrapped("Edit rejected; previous lighting kept. Use a finite, nonzero "
+                                   "direction, color 0..1, intensity 0..4, and ambient 0..1.");
+            }
+        }
         ImGui::Separator();
         const char* preview =
             selected == models.end() ? "No models" : selected->description.filePath.c_str();

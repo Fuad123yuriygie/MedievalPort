@@ -27,21 +27,27 @@ void ValidateDescription(const ModelDescription& model) {
     }
 }
 
-glm::vec3 ReadTransform(const nlohmann::json& record, const char* name) {
+float ReadNumber(const nlohmann::json& number, const char* name, double minimum, double maximum) {
+    if(!number.is_number()) {
+        throw std::invalid_argument(std::string(name) + " must contain numbers");
+    }
+    const double value = number.get<double>();
+    if(!std::isfinite(value) || value < minimum || value > maximum) {
+        throw std::invalid_argument(std::string(name) + " contains an out-of-range value");
+    }
+    return static_cast<float>(value);
+}
+
+glm::vec3 ReadTransform(const nlohmann::json& record, const char* name,
+                        double minimum = -std::numeric_limits<float>::max(),
+                        double maximum = std::numeric_limits<float>::max()) {
     const auto& values = record.at(name);
     if(!values.is_array() || values.size() != 3) {
         throw std::invalid_argument(std::string(name) + " must be an array of three numbers");
     }
     glm::vec3 result;
     for(int i = 0; i < 3; ++i) {
-        if(!values.at(i).is_number()) {
-            throw std::invalid_argument(std::string(name) + " contains a nonnumeric value");
-        }
-        const double value = values.at(i).get<double>();
-        if(!std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max()) {
-            throw std::invalid_argument(std::string(name) + " contains an out-of-range value");
-        }
-        result[i] = static_cast<float>(value);
+        result[i] = ReadNumber(values.at(i), name, minimum, maximum);
     }
     return result;
 }
@@ -72,10 +78,17 @@ ConfigManager::ConfigManager(std::filesystem::path filePath) : filePath_(std::mo
     }
 }
 
-bool ConfigManager::SaveObject(std::span<const ModelDescription> models) const {
+bool ConfigManager::SaveScene(const SceneDocument& scene) const {
     try {
-        nlohmann::json root = {{"model", nlohmann::json::array()}};
-        for(const auto& model : models) {
+        const auto lighting = ValidateSceneLighting(scene.lighting);
+        nlohmann::json root = {
+            {"model", nlohmann::json::array()},
+            {"lighting", {{"enabled", lighting.enabled},
+                          {"direction", {lighting.direction.x, lighting.direction.y, lighting.direction.z}},
+                          {"color", {lighting.color.x, lighting.color.y, lighting.color.z}},
+                          {"intensity", lighting.intensity},
+                          {"ambientStrength", lighting.ambientStrength}}}};
+        for(const auto& model : scene.models) {
             ValidateDescription(model);
             root["model"].push_back({{"filePath", PathToUtf8(PathFromUtf8(model.filePath))},
                                      {"position", {model.position.x, model.position.y, model.position.z}},
@@ -123,7 +136,7 @@ bool ConfigManager::SaveObject(std::span<const ModelDescription> models) const {
     }
 }
 
-std::vector<ModelDescription> ConfigManager::LoadObjectFromJson() const {
+SceneDocument ConfigManager::LoadScene() const {
     try {
         if(!std::filesystem::exists(filePath_)) {
             return {};
@@ -143,8 +156,24 @@ std::vector<ModelDescription> ConfigManager::LoadObjectFromJson() const {
         if(!root.is_object() || !root.contains("model") || !root.at("model").is_array()) {
             throw std::invalid_argument("Configuration must contain a model array");
         }
-        std::vector<ModelDescription> models;
-        models.reserve(root.at("model").size());
+        SceneDocument scene;
+        if(root.contains("lighting")) {
+            const auto& lighting = root.at("lighting");
+            if(!lighting.is_object() || !lighting.contains("enabled") ||
+               !lighting.at("enabled").is_boolean() || !lighting.contains("direction") ||
+               !lighting.contains("color") || !lighting.contains("intensity") ||
+               !lighting.contains("ambientStrength")) {
+                throw std::invalid_argument("Lighting must contain enabled, direction, color, intensity and ambientStrength");
+            }
+            scene.lighting.enabled = lighting.at("enabled").get<bool>();
+            scene.lighting.direction = ReadTransform(lighting, "direction");
+            scene.lighting.color = ReadTransform(lighting, "color", 0.0, 1.0);
+            scene.lighting.intensity = ReadNumber(lighting.at("intensity"), "intensity", 0.0, 4.0);
+            scene.lighting.ambientStrength =
+                ReadNumber(lighting.at("ambientStrength"), "ambientStrength", 0.0, 1.0);
+            scene.lighting = ValidateSceneLighting(scene.lighting);
+        }
+        scene.models.reserve(root.at("model").size());
         for(const auto& record : root.at("model")) {
             if(!record.is_object() || !record.contains("filePath") || !record.at("filePath").is_string()) {
                 throw std::invalid_argument("Model record must contain a string filePath");
@@ -156,9 +185,9 @@ std::vector<ModelDescription> ConfigManager::LoadObjectFromJson() const {
             model.scale = ReadTransform(record, "scale");
             ValidateDescription(model);
             model.filePath = PathToUtf8(PathFromUtf8(model.filePath));
-            models.push_back(std::move(model));
+            scene.models.push_back(std::move(model));
         }
-        return models;
+        return scene;
     }
     catch(const std::exception& error) {
         Log(LogLevel::Error, std::string("Cannot load configuration: ") + error.what());

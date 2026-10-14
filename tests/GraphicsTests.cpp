@@ -1,4 +1,5 @@
 #include "core/Camera.h"
+#include "core/SceneMath.h"
 #include "editor/Editor.h"
 #include "graphics/GraphicsContext.h"
 #include "graphics/IndexBuffer.h"
@@ -20,16 +21,21 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <glad/glad.h>
+#include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
+#include <iterator>
+#include <limits>
 #include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -63,6 +69,32 @@ void Write(const std::filesystem::path& path, const std::string& contents) {
     file << contents;
     file.close();
     Check(!file.fail(), "Failed to create graphics test fixture");
+}
+
+std::string ReadText(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    Check(file.is_open(), "Failed to open graphics test fixture");
+    const std::string contents{std::istreambuf_iterator<char>(file),
+                               std::istreambuf_iterator<char>()};
+    Check(!file.bad(), "Failed to read graphics test fixture");
+    return contents;
+}
+
+void WaitForModels(FileParser& assets, std::size_t expected) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while(std::chrono::steady_clock::now() < deadline) {
+        assets.ProcessPendingModels();
+        const auto& views = assets.GetModelViews();
+        for(const auto& view : views) {
+            Check(view.error.empty(), "Lighting fixture import failed");
+        }
+        if(views.size() == expected &&
+           std::all_of(views.begin(), views.end(), [](const auto& view) { return view.loaded; })) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Check(false, "Lighting fixture import timed out");
 }
 
 void TestOwnership(const GraphicsContext& context, const std::filesystem::path& assetRoot) {
@@ -236,6 +268,52 @@ void TestShaderFailures(const GraphicsContext& context, const std::filesystem::p
     Check(wrongTypeRejected, "A wrongly typed required uniform was accepted");
     Check(program.RequireUniformLocation("u_MVP", GL_FLOAT_MAT4) >= 0,
           "A valid required uniform was rejected");
+    const std::array<std::pair<const char*, GLenum>, 6> lightingUniforms{{
+        {"u_NormalMatrix", GL_FLOAT_MAT3},
+        {"u_LightingEnabled", GL_BOOL},
+        {"u_SunDirection", GL_FLOAT_VEC3},
+        {"u_SunColor", GL_FLOAT_VEC3},
+        {"u_SunIntensity", GL_FLOAT},
+        {"u_AmbientStrength", GL_FLOAT}}};
+    for(const auto& [name, type] : lightingUniforms) {
+        Check(program.RequireUniformLocation(name, type) >= 0,
+              "A required lighting uniform has the wrong type or is absent");
+        bool rejected = false;
+        try {
+            program.RequireUniformLocation(name, GL_FLOAT_MAT4);
+        } catch(const std::runtime_error&) {
+            rejected = true;
+        }
+        Check(rejected, "Lighting uniform type validation accepted mat4 for a non-mat4 uniform");
+    }
+
+    // DSA setters must work without a bound program, preserve column order, and ignore -1.
+    glUseProgram(0);
+    const glm::mat3 normalMatrix(glm::vec3(1.0f, 2.0f, 3.0f),
+                                 glm::vec3(4.0f, 5.0f, 6.0f),
+                                 glm::vec3(7.0f, 8.0f, 9.0f));
+    const auto normalLocation = program.RequireUniformLocation("u_NormalMatrix", GL_FLOAT_MAT3);
+    program.SetUniformMat3f(normalLocation, normalMatrix);
+    std::array<float, 9> uploadedMatrix{};
+    glGetUniformfv(program.GetId(), normalLocation, uploadedMatrix.data());
+    for(int column = 0; column < 3; ++column) {
+        for(int row = 0; row < 3; ++row) {
+            Check(uploadedMatrix[static_cast<std::size_t>(column * 3 + row)] ==
+                      normalMatrix[column][row],
+                  "mat3 setter transposed or lost normal-matrix values");
+        }
+    }
+    const glm::vec3 direction(0.25f, -0.5f, 0.75f);
+    const auto directionLocation = program.RequireUniformLocation("u_SunDirection", GL_FLOAT_VEC3);
+    program.SetUniform3f(directionLocation, direction);
+    std::array<float, 3> uploadedDirection{};
+    glGetUniformfv(program.GetId(), directionLocation, uploadedDirection.data());
+    for(int axis = 0; axis < 3; ++axis) {
+        Check(uploadedDirection[static_cast<std::size_t>(axis)] == direction[axis],
+              "vec3 setter lost lighting values");
+    }
+    program.SetUniformMat3f(-1, normalMatrix);
+    program.SetUniform3f(-1, direction);
     CheckGl();
 }
 
@@ -312,23 +390,717 @@ void TestTexturePages(const GraphicsContext& context, const std::filesystem::pat
     CheckGl();
 }
 
+void TestLighting(const GraphicsContext& context, const std::filesystem::path& assetRoot) {
+    const std::array<glm::vec3, 6> normals{{{0.0f, 0.0f, 1.0f},
+                                          {0.0f, 0.0f, -1.0f},
+                                          {1.0f, 0.0f, 1.0f},
+                                          {0.0f, 0.0f, 0.0f},
+                                          {1.0e-30f, 0.0f, 1.0e-30f},
+                                          {1.0e30f, 0.0f, 1.0e30f}}};
+    const std::array<glm::vec2, 4> corners{{{-0.6f, -0.6f},
+                                           {0.6f, -0.6f},
+                                           {0.6f, 0.6f},
+                                           {-0.6f, 0.6f}}};
+    std::vector<MeshVertex> vertices;
+    std::vector<std::uint32_t> indices;
+    for(std::size_t variant = 0; variant < normals.size(); ++variant) {
+        const auto first = static_cast<std::uint32_t>(vertices.size());
+        for(const auto& corner : corners) {
+            // Variant 2 is an actual tilted plane, with local normal parallel to (1, 0, 1).
+            vertices.push_back({{corner.x, corner.y, variant == 2 ? -corner.x : 0.0f},
+                                normals[variant], {0.5f, 0.5f}});
+        }
+        for(const std::uint32_t index : std::array<std::uint32_t, 6>{0, 1, 2, 0, 2, 3}) {
+            indices.push_back(first + index);
+        }
+    }
+    VertexBuffer vertexBuffer(context, std::as_bytes(std::span(vertices)));
+    IndexBuffer indexBuffer(context, indices);
+    VertexArray vertexArray(context);
+    VertexBufferLayout layout;
+    layout.Push<float>(0, 3);
+    layout.Push<float>(1, 3);
+    layout.Push<float>(2, 2);
+    vertexArray.AddBuffer(vertexBuffer, layout);
+    vertexArray.SetIndexBuffer(indexBuffer);
+    TextureArray texture(context, 1, 1, 3, true);
+    texture.UploadLayer(0, MakeSolidImage("lighting:white", 1, {255, 255, 255, 255}));
+    texture.UploadLayer(1, MakeSolidImage("lighting:alpha", 1, {255, 255, 255, 128}));
+    texture.UploadLayer(2, MakeSolidImage("lighting:srgb", 1, {128, 64, 192, 128}));
+    texture.GenerateMipmaps();
+
+    RenderSettings settings;
+    settings.samples = 0;
+    settings.clearColor = glm::vec4(0.0f);
+    Renderer renderer(context, assetRoot, settings);
+    // Use known RGBA precision, including alpha, independently of the window pixel format.
+    struct LinearTarget {
+        GLuint framebuffer = 0;
+        std::array<GLuint, 2> buffers{};
+        GLboolean ditherEnabled = glIsEnabled(GL_DITHER);
+        ~LinearTarget() {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteFramebuffers(1, &framebuffer);
+            glDeleteRenderbuffers(static_cast<GLsizei>(buffers.size()), buffers.data());
+            if(ditherEnabled) {
+                glEnable(GL_DITHER);
+            }
+        }
+    } target;
+    glCreateFramebuffers(1, &target.framebuffer);
+    glCreateRenderbuffers(static_cast<GLsizei>(target.buffers.size()), target.buffers.data());
+    glNamedRenderbufferStorage(target.buffers[0], GL_RGBA8, 64, 64);
+    glNamedRenderbufferStorage(target.buffers[1], GL_DEPTH_COMPONENT24, 64, 64);
+    glNamedFramebufferRenderbuffer(target.framebuffer, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+                                    target.buffers[0]);
+    glNamedFramebufferRenderbuffer(target.framebuffer, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
+                                    target.buffers[1]);
+    glNamedFramebufferDrawBuffer(target.framebuffer, GL_COLOR_ATTACHMENT0);
+    glNamedFramebufferReadBuffer(target.framebuffer, GL_COLOR_ATTACHMENT0);
+    Check(glCheckNamedFramebufferStatus(target.framebuffer, GL_FRAMEBUFFER) ==
+              GL_FRAMEBUFFER_COMPLETE,
+          "Linear lighting framebuffer is incomplete");
+    const auto begin = [&] {
+        renderer.BeginScene(64, 64);
+        glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
+        glDisable(GL_FRAMEBUFFER_SRGB);
+        glDisable(GL_DITHER);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    };
+    const auto checkPixel = [](const glm::vec4& expected, const char* message,
+                               int x = 32, int y = 32) {
+        std::array<unsigned char, 4> pixel{};
+        glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        CheckGl();
+        for(int channel = 0; channel < 4; ++channel) {
+            const auto expectedByte = static_cast<int>(
+                std::lround(std::clamp(expected[channel], 0.0f, 1.0f) * 255.0f));
+            const auto actual = static_cast<int>(pixel[static_cast<std::size_t>(channel)]);
+            // Two bytes cover interpolation, sRGB texture decode and normalized-target rounding.
+            if(std::abs(actual - expectedByte) > 2) {
+                throw std::runtime_error(std::string(message) + " (channel " +
+                                         std::to_string(channel) + ": got " +
+                                         std::to_string(actual) + ", expected " +
+                                         std::to_string(expectedByte) + ")");
+            }
+        }
+    };
+    const auto checkLightingUniforms = [](const SceneLighting& lighting) {
+        GLint currentProgram = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
+        Check(currentProgram != 0, "Scene submission did not bind its shader");
+        const auto program = static_cast<GLuint>(currentProgram);
+        GLint enabled = -1;
+        glGetUniformiv(program, glGetUniformLocation(program, "u_LightingEnabled"), &enabled);
+        Check(enabled == (lighting.enabled ? 1 : 0), "Lighting toggle leaked across submissions");
+        const std::array<std::pair<const char*, glm::vec3>, 2> vectors{{
+            {"u_SunDirection", lighting.direction}, {"u_SunColor", lighting.color}}};
+        for(const auto& [name, expected] : vectors) {
+            std::array<float, 3> value{};
+            glGetUniformfv(program, glGetUniformLocation(program, name), value.data());
+            for(int axis = 0; axis < 3; ++axis) {
+                Check(std::abs(value[static_cast<std::size_t>(axis)] - expected[axis]) < 1.0e-6f,
+                      "Lighting vector leaked across submissions");
+            }
+        }
+        const std::array<std::pair<const char*, float>, 2> scalars{{
+            {"u_SunIntensity", lighting.intensity},
+            {"u_AmbientStrength", lighting.ambientStrength}}};
+        for(const auto& [name, expected] : scalars) {
+            float value = -1.0f;
+            glGetUniformfv(program, glGetUniformLocation(program, name), &value);
+            Check(std::abs(value - expected) < 1.0e-6f,
+                  "Lighting strength leaked across submissions");
+        }
+        CheckGl();
+    };
+
+    DrawItem base;
+    base.vertexArray = &vertexArray;
+    base.textureArray = &texture;
+    base.indexCount = 6;
+    base.baseColor = {0.5f, 0.4f, 0.3f, 1.0f};
+    // A null first objectKey must still upload both transforms.
+    const auto transformed = [&](const ModelDescription& description) {
+        auto draw = base;
+        const auto model = MakeModelMatrix(description);
+        draw.modelViewProjection = model;
+        draw.normalMatrix = MakeNormalMatrix(model);
+        draw.mirrored = IsMirrored(description.scale);
+        return draw;
+    };
+    const auto shaded = [&](float strength) {
+        return glm::vec4(glm::vec3(base.baseColor) * strength, 1.0f);
+    };
+    const auto render = [&](const DrawItem& draw, const SceneLighting& lighting,
+                            const glm::vec4& expected, const char* message) {
+        begin();
+        renderer.DrawScene(std::span<const DrawItem>(&draw, 1), lighting);
+        checkPixel(expected, message);
+    };
+    SceneLighting sun;
+    sun.direction = {0.0f, 0.0f, -1.0f};
+    sun.intensity = 0.6f;
+    sun.ambientStrength = 0.2f;
+    render(base, sun, shaded(0.8f), "Front-facing surface received incorrect sunlight");
+    auto back = base;
+    back.firstIndex = 6;
+    render(back, sun, shaded(0.2f), "Back-facing normal received diffuse sunlight");
+    auto behind = sun;
+    behind.direction = {0.0f, 0.0f, 1.0f};
+    render(base, behind, shaded(0.2f), "Sun direction was not interpreted as ray travel");
+    auto ambient = sun;
+    ambient.intensity = 0.0f;
+    ambient.ambientStrength = 0.35f;
+    ambient.color = {0.0f, 0.25f, 1.0f};
+    render(base, ambient, shaded(0.35f), "Ambient fill was tinted or depended on diffuse light");
+    ambient.ambientStrength = 0.0f;
+    render(base, ambient, shaded(0.0f), "Zero lighting strengths did not produce black RGB");
+    auto colored = sun;
+    colored.color = {0.25f, 0.5f, 1.0f};
+    colored.intensity = 1.2f;
+    colored.ambientStrength = 0.1f;
+    const glm::vec4 coloredPixel(0.2f, 0.28f, 0.39f, 1.0f);
+    render(base, colored, coloredPixel, "Sun color or intensity was not applied in linear RGB");
+
+    ModelDescription description;
+    description.rotation.y = 60.0f;
+    render(transformed(description), sun, shaded(0.5f), "Rotated normal was not lit in world space");
+    description.rotation.y = 25.0f;
+    description.scale = {1.5f, 0.6f, 0.5f};
+    auto nonuniform = transformed(description);
+    nonuniform.firstIndex = 12;
+    nonuniform.modelViewProjection =
+        glm::scale(glm::mat4(1.0f), glm::vec3(0.8f, 0.8f, 0.4f)) *
+        nonuniform.modelViewProjection;
+    const double angle = glm::radians(25.0);
+    const float normalZ = static_cast<float>(
+        (2.0 * std::cos(angle) - (2.0 / 3.0) * std::sin(angle)) / std::sqrt(4.0 + 4.0 / 9.0));
+    render(nonuniform, sun, shaded(0.2f + 0.6f * normalZ),
+           "Nonuniformly scaled tilted surface did not use inverse-transpose normals");
+
+    description = ModelDescription{};
+    description.scale.x = -1.0f;
+    render(transformed(description), sun, shaded(0.8f),
+           "Mirrored surface was culled or its transformed normal was negated twice");
+    description.scale.y = -1.0f;
+    render(transformed(description), sun, shaded(0.8f), "Even mirror parity changed sunlight");
+    description.scale = {1.0f, 1.0f, 0.0f};
+    const auto singular = transformed(description);
+    Check(singular.normalMatrix == glm::mat3(0.0f), "Singular model retained a valid normal matrix");
+    render(singular, sun, shaded(0.2f), "Visible zero-Z-scale plane was not ambient-only");
+    auto zeroNormal = base;
+    zeroNormal.firstIndex = 18;
+    render(zeroNormal, sun, shaded(0.2f), "Zero vertex normal did not fall back to ambient");
+    auto tinyNormal = base;
+    tinyNormal.firstIndex = 24;
+    const auto diagonalPixel = shaded(0.2f + 0.6f / std::sqrt(2.0f));
+    render(tinyNormal, sun, diagonalPixel, "Tiny fragment normal underflowed during normalization");
+    auto hugeNormal = base;
+    hugeNormal.firstIndex = 30;
+    render(hugeNormal, sun, diagonalPixel, "Huge fragment normal overflowed during normalization");
+
+    const std::array<int, 2> objectKeys{};
+    description = ModelDescription{};
+    description.position.x = -0.5f;
+    description.scale = {0.65f, 0.8f, 1.0f};
+    auto left = transformed(description);
+    left.objectKey = &objectKeys[0];
+    description.position.x = 0.5f;
+    description.rotation.y = 60.0f;
+    auto right = transformed(description);
+    right.objectKey = &objectKeys[1];
+    begin();
+    renderer.DrawScene(std::array<DrawItem, 2>{left, right}, sun);
+    checkPixel(shaded(0.8f), "First object's normal matrix was stale", 16, 32);
+    checkPixel(shaded(0.5f), "Normal matrix was not uploaded when objectKey changed", 48, 32);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    renderer.DrawScene(std::array<DrawItem, 2>{right, left}, sun);
+    checkPixel(shaded(0.8f), "Reordered objects reused the previous normal matrix", 16, 32);
+    checkPixel(shaded(0.5f), "Reordered objects reused the previous MVP", 48, 32);
+
+    auto unlit = colored;
+    unlit.enabled = false;
+    unlit.direction = {1.0f, 0.0f, 0.0f};
+    unlit.intensity = 2.0f;
+    unlit.ambientStrength = 0.75f;
+    begin();
+    renderer.DrawScene(std::span<const DrawItem>(&base, 1), sun);
+    checkPixel(shaded(0.8f), "Initial lit submission failed");
+    renderer.DrawScene({}, unlit);
+    checkLightingUniforms(unlit);
+    checkPixel(shaded(0.8f), "Empty disabled submission changed the framebuffer");
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    renderer.DrawScene(std::span<const DrawItem>(&base, 1), unlit);
+    checkPixel(base.baseColor, "Disabled submission retained lighting from its predecessor");
+    checkLightingUniforms(unlit);
+    renderer.DrawScene({}, colored);
+    checkLightingUniforms(colored);
+    checkPixel(base.baseColor, "Empty enabled submission changed the framebuffer");
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    renderer.DrawScene(std::span<const DrawItem>(&base, 1), colored);
+    checkPixel(coloredPixel, "Re-enabled lighting retained disabled or stale sun settings");
+    renderer.DrawScene({}, sun);
+    checkLightingUniforms(sun);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    renderer.DrawScene(std::span<const DrawItem>(&back, 1), sun);
+    checkPixel(shaded(0.2f), "Lighting or object state leaked across empty submissions");
+
+    auto alpha = base;
+    alpha.textureLayer = 1;
+    alpha.baseColor.a = 0.5f;
+    const float coverage = (128.0f / 255.0f) * alpha.baseColor.a;
+    alpha.alphaCutoff = 0.3f;
+    render(alpha, sun, glm::vec4(0.0f), "Lighting changed alpha-mask rejection");
+    render(alpha, unlit, glm::vec4(0.0f), "Disabled lighting changed alpha-mask rejection");
+    alpha.alphaCutoff = 0.2f;
+    const glm::vec4 litAlpha(glm::vec3(shaded(0.8f)), coverage);
+    render(alpha, sun, litAlpha, "Lighting modified texture * tint alpha or masked visible coverage");
+    render(alpha, unlit, glm::vec4(glm::vec3(base.baseColor), coverage),
+           "Unlit alpha differs from lit alpha");
+    // Use exactly representable coverage to test '<', not texture normalization roundoff.
+    auto boundary = alpha;
+    boundary.textureLayer = 0;
+    boundary.alphaCutoff = 0.5f;
+    render(boundary, sun, glm::vec4(glm::vec3(shaded(0.8f)), 0.5f),
+           "Alpha equal to the cutoff was incorrectly discarded");
+    alpha.alphaCutoff = 0.0f;
+    alpha.blended = true;
+    const glm::vec4 background(0.125f, 0.25f, 0.375f, 0.5f);
+    for(const auto& lighting : std::array<SceneLighting, 2>{sun, unlit}) {
+        begin();
+        glClearColor(background.r, background.g, background.b, background.a);
+        glClear(GL_COLOR_BUFFER_BIT);
+        renderer.DrawScene(std::span<const DrawItem>(&alpha, 1), lighting);
+        const glm::vec4 source(lighting.enabled ? glm::vec3(litAlpha) : glm::vec3(base.baseColor),
+                               coverage);
+        // Preserve the renderer's existing SRC_ALPHA / ONE_MINUS_SRC_ALPHA policy for RGBA.
+        checkPixel(source * coverage + background * (1.0f - coverage),
+                   "Lighting changed material blending or the blended alpha channel");
+        GLboolean depthWrites = GL_FALSE;
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &depthWrites);
+        Check(depthWrites == GL_TRUE && glIsEnabled(GL_BLEND) == GL_FALSE,
+              "Lit blend submission leaked blend or depth-write state");
+    }
+
+    const auto decodeSrgb = [](float value) {
+        value /= 255.0f;
+        return value <= 0.04045f ? value / 12.92f : std::pow((value + 0.055f) / 1.055f, 2.4f);
+    };
+    auto tinted = base;
+    tinted.textureLayer = 2;
+    const glm::vec3 decoded(decodeSrgb(128.0f), decodeSrgb(64.0f), decodeSrgb(192.0f));
+    render(tinted, sun, glm::vec4(decoded * glm::vec3(base.baseColor) * 0.8f, 128.0f / 255.0f),
+           "Lighting did not preserve sRGB texture decode and linear alpha");
+    CheckGl();
+}
+
+void TestLightingEdits(WindowSystem& window, const std::filesystem::path& root,
+                       const std::filesystem::path& assetRoot) {
+    const auto scenePath = root / "empty-lighting.json";
+    ImportSettings importSettings;
+    importSettings.textureSize = 8;
+    importSettings.textureLayersPerPage = 2;
+    RenderSettings renderSettings;
+    renderSettings.samples = 0;
+    ImguiInterface gui(window.GetWindow());
+    Renderer renderer(window.GetContext(), assetRoot, renderSettings);
+    SceneLighting disabled;
+    {
+        FileParser assets(window.GetContext(), scenePath, importSettings);
+        Check(!assets.SaveScene() && !std::filesystem::exists(scenePath),
+              "An unrestored scene could overwrite its configuration");
+        assets.LoadSavedFiles();
+        Check(assets.GetModelViews().empty() && assets.GetLighting() == SceneLighting{} &&
+                  !assets.IsDirty(),
+              "Missing empty scene did not restore clean default lighting");
+        Check(assets.UpdateLighting(SceneLighting{}) && !assets.IsDirty(),
+              "Default lighting no-op dirtied an empty scene");
+        Editor editor(window, renderer, gui, assets);
+        editor.Run(1);
+        Check(!assets.IsDirty() && !std::filesystem::exists(scenePath),
+              "Opening the empty editor authored or saved lighting");
+
+        auto lighting = assets.GetLighting();
+        lighting.direction = {0.0f, -3.0f, -4.0f};
+        lighting.color = {0.25f, 0.5f, 0.75f};
+        lighting.intensity = 1.25f;
+        lighting.ambientStrength = 0.125f;
+        Check(assets.UpdateLighting(lighting) && assets.IsDirty(),
+              "Lighting-only edit did not dirty an empty scene");
+        const auto canonical = assets.GetLighting();
+        Check(std::abs(canonical.direction.y + 0.6f) < 1.0e-6f &&
+                  std::abs(canonical.direction.z + 0.8f) < 1.0e-6f &&
+                  canonical.direction.x == 0.0f,
+              "Lighting edit did not retain a normalized ray direction");
+        editor.Run(2);
+        Check(assets.IsDirty() && assets.GetLighting() == canonical &&
+                  assets.GetModelViews().empty(),
+              "Empty editor frames lost lighting-only edits");
+        Check(assets.SaveScene() && !assets.IsDirty(), "Lighting-only save did not clear dirty");
+        const auto saved = ConfigManager(scenePath).LoadScene();
+        Check(saved.models.empty() && saved.lighting == canonical,
+              "Empty scene lost lighting during serialization");
+        const auto originalBytes = ReadText(scenePath);
+        Check(assets.UpdateLighting(lighting) && !assets.IsDirty() &&
+                  assets.UpdateLighting(canonical) && !assets.IsDirty(),
+              "Canonical or equivalent authored lighting no-op dirtied the scene");
+
+        auto badDirection = canonical;
+        badDirection.direction = glm::vec3(0.0f);
+        auto badColor = canonical;
+        badColor.color.g = 1.01f;
+        auto badIntensity = canonical;
+        badIntensity.intensity = std::numeric_limits<float>::quiet_NaN();
+        auto badAmbient = canonical;
+        badAmbient.ambientStrength = -0.1f;
+        for(const auto& invalid :
+            std::array<SceneLighting, 4>{badDirection, badColor, badIntensity, badAmbient}) {
+            Check(!assets.UpdateLighting(invalid) && assets.GetLighting() == canonical &&
+                      !assets.IsDirty(),
+                  "Rejected lighting edit changed clean scene state");
+        }
+        editor.Run(1);
+        Check(ReadText(scenePath) == originalBytes && !assets.IsDirty(),
+              "No-op or rejected lighting edits rewrote the scene");
+
+        disabled = canonical;
+        disabled.enabled = false;
+        Check(assets.UpdateLighting(disabled) && assets.IsDirty(),
+              "Disabling lighting did not dirty the scene");
+        Check(!assets.UpdateLighting(badDirection) && assets.GetLighting() == disabled &&
+                  assets.IsDirty(),
+              "Rejected lighting edit cleared an existing dirty change");
+        editor.Run(1);
+        Check(assets.SaveScene() && !assets.IsDirty(), "Disabled lighting could not be saved");
+        assets.Shutdown();
+        Check(!assets.SaveScene() && !assets.UpdateLighting(SceneLighting{}),
+              "Stopped scene accepted a lighting edit or save");
+    }
+    const auto disabledBytes = ReadText(scenePath);
+    {
+        FileParser assets(window.GetContext(), scenePath, importSettings);
+        assets.LoadSavedFiles();
+        Check(assets.GetLighting() == disabled && !assets.GetLighting().enabled &&
+                  !assets.IsDirty() && assets.GetModelViews().empty(),
+              "Explicit disabled lighting did not reopen cleanly");
+        Editor editor(window, renderer, gui, assets);
+        editor.Run(1);
+        Check(ReadText(scenePath) == disabledBytes && !assets.IsDirty(),
+              "Reopening disabled lighting rewrote the scene");
+        Check(assets.UpdateLighting(SceneLighting{}) && assets.GetLighting() == SceneLighting{} &&
+                  assets.IsDirty(),
+              "Reset lighting did not restore defaults and dirty the scene");
+        editor.Run(1);
+        Check(assets.SaveScene() && !assets.IsDirty(), "Reset lighting could not be saved");
+        Check(assets.UpdateLighting(SceneLighting{}) && !assets.IsDirty(),
+              "Repeated lighting reset dirtied an already-default scene");
+    }
+    const auto resetBytes = ReadText(scenePath);
+    {
+        FileParser assets(window.GetContext(), scenePath, importSettings);
+        assets.LoadSavedFiles();
+        Check(assets.GetLighting() == SceneLighting{} && !assets.IsDirty(),
+              "Saved lighting reset did not survive reopen");
+        Editor editor(window, renderer, gui, assets);
+        editor.Run(1);
+    }
+    Check(ReadText(scenePath) == resetBytes, "Clean reopened editor rewrote reset lighting");
+    CheckGl();
+}
+
+void TestLightingRestore(const GraphicsContext& context, const std::filesystem::path& root) {
+    ImportSettings settings;
+    settings.textureSize = 8;
+    settings.textureLayersPerPage = 2;
+    Write(root / "legacy-lighting.obj", "v -0.5 -0.5 0\nv 0.5 -0.5 0\nv 0 0.5 0\nf 1 2 3\n");
+    const std::array<std::string, 4> legacy{{
+        "", "null \n", "{ \"model\" : [] }\n",
+        R"({"model":[{"filePath":"legacy-lighting.obj","position":[0,0,0],"rotation":[0,0,0],"scale":[1,1,1]}]})"}};
+    for(std::size_t index = 0; index < legacy.size(); ++index) {
+        const auto scenePath = root / ("legacy-lighting-" + std::to_string(index) + ".json");
+        if(!legacy[index].empty()) {
+            Write(scenePath, legacy[index]);
+        }
+        {
+            FileParser assets(context, scenePath, settings);
+            assets.LoadSavedFiles();
+            assets.LoadSavedFiles();
+            const std::size_t modelCount = index == 3 ? 1 : 0;
+            WaitForModels(assets, modelCount);
+            Check(assets.GetLighting() == SceneLighting{} && !assets.IsDirty(),
+                  "Legacy restore changed default lighting or dirtied the scene");
+            Check(assets.UpdateLighting(SceneLighting{}) && !assets.IsDirty(),
+                  "Default lighting no-op dirtied a legacy scene");
+            assets.Shutdown();
+            Check(!assets.SaveScene(), "Shutdown legacy scene allowed explicit saving");
+        }
+        if(legacy[index].empty()) {
+            Check(!std::filesystem::exists(scenePath), "Opening a missing scene created its file");
+        }
+        else {
+            Check(ReadText(scenePath) == legacy[index],
+                  "Opening or shutting down a legacy scene rewrote its bytes");
+        }
+    }
+
+    // A null document is legacy; an explicitly null, incomplete or invalid lighting object is not.
+    const std::array<std::string, 6> malformed{{
+        "null",
+        R"({"enabled":true})",
+        R"({"enabled":1,"direction":[0,0,-1],"color":[1,1,1],"intensity":0.8,"ambientStrength":0.2})",
+        R"({"enabled":false,"direction":[0,0,0],"color":[1,1,1],"intensity":0.8,"ambientStrength":0.2})",
+        R"({"enabled":true,"direction":[0,0,-1],"color":[1,1.01,1],"intensity":0.8,"ambientStrength":0.2})",
+        R"({"enabled":true,"direction":[0,0,-1],"color":[1,1,1],"intensity":"0.8","ambientStrength":0.2})"}};
+    for(std::size_t index = 0; index < malformed.size(); ++index) {
+        const auto scenePath = root / ("malformed-lighting-" + std::to_string(index) + ".json");
+        const std::string original = "{\"model\":[],\"lighting\":" + malformed[index] + "}\n";
+        Write(scenePath, original);
+        {
+            FileParser assets(context, scenePath, settings);
+            bool rejected = false;
+            try {
+                assets.LoadSavedFiles();
+            } catch(const std::exception&) {
+                rejected = true;
+            }
+            Check(rejected && !assets.IsDirty() && assets.GetModelViews().empty() &&
+                      assets.GetLighting() == SceneLighting{},
+                  "Malformed explicit lighting was accepted or partially restored");
+            auto lighting = assets.GetLighting();
+            lighting.ambientStrength = 0.4f;
+            Check(assets.UpdateLighting(lighting) && assets.IsDirty(),
+                  "Could not prepare a dirty failed-restore scene");
+            Check(!assets.SaveScene() && assets.IsDirty(),
+                  "Malformed lighting restore did not guard explicit saving");
+            assets.Shutdown();
+            Check(assets.IsDirty() && !assets.SaveScene(),
+                  "Failed restore shutdown discarded dirty state or enabled saving");
+        }
+        Check(ReadText(scenePath) == original, "Failed lighting restore mutated the original file");
+    }
+    CheckGl();
+}
+
+void TestLightingSaveFailure(const GraphicsContext& context, const std::filesystem::path& root) {
+    const auto scenePath = root / "lighting-save-failure.json";
+    const auto preservedPath = root / "lighting-save-preserved.json";
+    const ConfigManager config(scenePath);
+    Check(config.SaveScene(SceneDocument{}), "Could not prepare lighting save-failure fixture");
+    const auto originalBytes = ReadText(scenePath);
+    FileParser assets(context, scenePath);
+    assets.LoadSavedFiles();
+    auto lighting = assets.GetLighting();
+    lighting.intensity = 1.5f;
+    Check(assets.UpdateLighting(lighting) && assets.IsDirty(),
+          "Could not prepare a dirty lighting-only scene");
+
+    // A nonempty directory deterministically blocks atomic replacement on Windows and POSIX,
+    // without depending on permissions (which elevated test users can bypass).
+    std::filesystem::rename(scenePath, preservedPath);
+    std::filesystem::create_directory(scenePath);
+    const auto sentinel = scenePath / "original.json";
+    Write(sentinel, originalBytes);
+    Check(!assets.SaveScene() && assets.IsDirty() && assets.GetLighting() == lighting,
+          "Failed lighting save cleared or changed the authored state");
+    Check(ReadText(preservedPath) == originalBytes && ReadText(sentinel) == originalBytes,
+          "Failed atomic replacement damaged existing scene data");
+    for(const auto& entry : std::filesystem::directory_iterator(root)) {
+        Check(PathToUtf8(entry.path().filename()).find("lighting-save-failure.json.tmp-") != 0,
+              "Failed lighting save leaked a temporary replacement directory");
+    }
+    std::filesystem::remove(sentinel);
+    std::filesystem::remove(scenePath);
+    std::filesystem::rename(preservedPath, scenePath);
+    Check(assets.SaveScene() && !assets.IsDirty() && config.LoadScene().lighting == lighting,
+          "Retrying a failed lighting save did not commit and clear dirty");
+    assets.Shutdown();
+
+    const auto missingPath = root / "missing-lighting-parent" / "scene.json";
+    FileParser missing(context, missingPath);
+    missing.LoadSavedFiles();
+    Check(missing.UpdateLighting(lighting) && missing.IsDirty(),
+          "Could not prepare missing-parent save failure");
+    Check(!missing.SaveScene() && missing.IsDirty(), "Missing-parent save cleared dirty state");
+    missing.Shutdown();
+    Check(missing.IsDirty() && !missing.SaveScene() && !std::filesystem::exists(missingPath),
+          "Failed shutdown save pretended to persist lighting");
+    CheckGl();
+}
+
+void TestCachedNormalTransforms(const GraphicsContext& context, const std::filesystem::path& root) {
+    const auto modelPath = root / "cached-normals.obj";
+    Write(modelPath, "v -2 -2 0\nv 2 -2 0\nv 2 2 0\nv -2 2 0\nf 1 2 3 4\n");
+    const auto scenePath = root / "cached-normals.json";
+    ModelDescription original;
+    original.filePath = PathToUtf8(modelPath);
+    original.position = {0.1f, -0.1f, 0.0f};
+    original.rotation = {15.0f, 25.0f, 10.0f};
+    original.scale = {-0.15f, 0.2f, 0.4f};
+    SceneDocument document;
+    document.models.push_back(original);
+    Check(ConfigManager(scenePath).SaveScene(document), "Could not prepare cached-normal fixture");
+    ImportSettings settings;
+    settings.textureSize = 8;
+    settings.textureLayersPerPage = 2;
+    FileParser assets(context, scenePath, settings);
+    assets.LoadSavedFiles();
+    WaitForModels(assets, 1);
+    const auto id = assets.GetModelViews().front().id;
+    const auto initialDraws = assets.BuildDrawList(glm::mat4(1.0f));
+    const auto initialModel = MakeModelMatrix(original);
+    Check(initialDraws.size() == 1 && initialDraws.front().modelViewProjection == initialModel &&
+              initialDraws.front().normalMatrix == MakeNormalMatrix(initialModel) &&
+              initialDraws.front().mirrored && !assets.IsDirty(),
+          "Restored model did not cache its normal matrix and signed-scale winding cleanly");
+    const auto projection = glm::scale(glm::mat4(1.0f), glm::vec3(0.5f, 0.75f, 0.25f));
+    const auto projected = assets.BuildDrawList(projection);
+    Check(projected.size() == 1 &&
+              projected.front().modelViewProjection == projection * initialModel &&
+              projected.front().normalMatrix == initialDraws.front().normalMatrix,
+          "Camera/projection changes contaminated the cached world normal matrix");
+    Check(assets.UpdateTransform(id, original) && !assets.IsDirty(),
+          "No-op transform dirtied the scene");
+
+    auto invalid = original;
+    invalid.position = {0.4f, 0.2f, 0.0f};
+    invalid.rotation = glm::vec3(0.0f);
+    invalid.scale = {std::numeric_limits<float>::max(), 0.3f, 1.0f};
+    const auto candidateModel = MakeModelMatrix(invalid);
+    const auto candidateNormal = MakeNormalMatrix(candidateModel);
+    for(int column = 0; column < 4; ++column) {
+        Check(IsFinite(glm::vec3(candidateModel[column])),
+              "Atomicity fixture must have a valid finite candidate model matrix");
+    }
+    for(int column = 0; column < 3; ++column) {
+        Check(IsFinite(candidateNormal[column]),
+              "Atomicity fixture must have a finite candidate normal matrix");
+    }
+    bool boundsOverflow = false;
+    try {
+        TransformBounds(Bounds{{-2.0f, -2.0f, 0.0f}, {2.0f, 2.0f, 0.0f}}, candidateModel);
+    } catch(const std::invalid_argument&) {
+        boundsOverflow = true;
+    }
+    Check(boundsOverflow, "Atomicity fixture did not overflow transformed bounds");
+    const auto checkRejectedTransform = [&] {
+        const auto before = *assets.GetDescription(id);
+        const bool wasDirty = assets.IsDirty();
+        const auto beforeDraws = assets.BuildDrawList(glm::mat4(1.0f));
+        Check(beforeDraws.size() == 1, "Atomicity fixture is not visible before the failed edit");
+        const auto beforeDraw = beforeDraws.front();
+        const std::array<glm::mat4, 4> probes{{
+            glm::mat4(1.0f),
+            glm::translate(glm::mat4(1.0f), glm::vec3(1.25f, 0.0f, 0.0f)),
+            glm::translate(glm::mat4(1.0f), glm::vec3(-1.25f, 0.0f, 0.0f)),
+            glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 2.0f, 0.0f))}};
+        std::array<std::size_t, 4> visible{};
+        for(std::size_t index = 0; index < probes.size(); ++index) {
+            visible[index] = assets.BuildDrawList(probes[index]).size();
+        }
+        Check(!assets.UpdateTransform(id, invalid), "Bounds-overflow transform edit was accepted");
+        const auto after = *assets.GetDescription(id);
+        const auto afterDraws = assets.BuildDrawList(glm::mat4(1.0f));
+        Check(after.filePath == before.filePath && after.position == before.position &&
+                  after.rotation == before.rotation && after.scale == before.scale &&
+                  assets.IsDirty() == wasDirty,
+              "Failed transform edit partially committed its description or dirty state");
+        Check(afterDraws.size() == 1 &&
+                  afterDraws.front().normalMatrix == beforeDraw.normalMatrix &&
+                  afterDraws.front().modelViewProjection == beforeDraw.modelViewProjection &&
+                  afterDraws.front().mirrored == beforeDraw.mirrored &&
+                  afterDraws.front().distanceSquared == beforeDraw.distanceSquared &&
+                  afterDraws.front().objectKey == beforeDraw.objectKey,
+              "Failed transform edit partially committed cached draw state or bounds center");
+        for(std::size_t index = 0; index < probes.size(); ++index) {
+            Check(assets.BuildDrawList(probes[index]).size() == visible[index],
+                  "Failed transform edit changed bounds/frustum visibility");
+        }
+    };
+    const auto savedBytes = ReadText(scenePath);
+    checkRejectedTransform();
+    Check(ReadText(scenePath) == savedBytes, "Rejected transform edit mutated the saved scene");
+    auto edited = original;
+    edited.rotation.z += 5.0f;
+    Check(assets.UpdateTransform(id, edited) && assets.IsDirty(), "Valid transform edit failed");
+    const auto editedDraws = assets.BuildDrawList(glm::mat4(1.0f));
+    Check(editedDraws.size() == 1 &&
+              editedDraws.front().normalMatrix == MakeNormalMatrix(MakeModelMatrix(edited)) &&
+              editedDraws.front().normalMatrix != initialDraws.front().normalMatrix,
+          "Successful transform edit did not replace the cached normal matrix");
+    checkRejectedTransform();
+    Check(assets.SaveScene() && !assets.IsDirty(), "Could not save the valid transform edit");
+
+    const std::array<std::pair<glm::vec3, bool>, 4> extremes{{
+        {{-1.0e30f, 1.0e30f, 1.0e30f}, true},
+        {{-1.0e30f, -1.0e30f, 1.0e30f}, false},
+        {{-1.0e-30f, 1.0e-30f, 1.0e-30f}, true},
+        {{-1.0e-30f, -1.0e-30f, 1.0e-30f}, false}}};
+    for(const auto& [scale, mirrored] : extremes) {
+        edited.position = glm::vec3(0.0f);
+        edited.rotation = glm::vec3(0.0f);
+        edited.scale = scale;
+        Check(assets.UpdateTransform(id, edited), "Finite extreme signed scale was rejected");
+        // Centered bounds and reciprocal projection keep culling/distance calculations finite.
+        const auto viewProjection =
+            glm::scale(glm::mat4(1.0f), glm::vec3(1.0f / std::abs(scale.x)));
+        const auto draws = assets.BuildDrawList(viewProjection);
+        const auto model = MakeModelMatrix(edited);
+        Check(draws.size() == 1 && draws.front().mirrored == mirrored &&
+                  draws.front().normalMatrix == MakeNormalMatrix(model) &&
+                  draws.front().normalMatrix != glm::mat3(0.0f) &&
+                  draws.front().modelViewProjection == viewProjection * model &&
+                  std::isfinite(draws.front().distanceSquared),
+              "Extreme signed scale lost cached normals or used overflowing determinant winding");
+        for(int column = 0; column < 3; ++column) {
+            Check(IsFinite(draws.front().normalMatrix[column]),
+                  "Extreme scale published nonfinite cached normals");
+        }
+    }
+    edited.scale = {0.2f, 0.2f, 0.0f};
+    Check(assets.UpdateTransform(id, edited), "Legal zero scale was rejected by the scene owner");
+    const auto singular = assets.BuildDrawList(glm::mat4(1.0f));
+    Check(singular.size() == 1 && singular.front().normalMatrix == glm::mat3(0.0f) &&
+              !singular.front().mirrored,
+          "Visible zero-Z-scale instance retained stale normals or winding");
+    Check(assets.SaveScene() && !assets.IsDirty(), "Could not save legal zero-scale fixture");
+    assets.Shutdown();
+    CheckGl();
+}
+
 void TestRestoreFailure(const GraphicsContext& context, const std::filesystem::path& root) {
     const auto scenePath = root / "restore-failure.json";
     std::array<ModelDescription, 2> original;
     original[0].filePath = PathToUtf8(root / std::filesystem::path(u8"caf\u00e9-\u6a21\u578b.OBJ"));
     original[1].filePath = PathToUtf8(root / "unsupported.fbx");
     const ConfigManager config(scenePath);
-    Check(config.SaveObject(original), "Could not prepare transactional restore test");
-    bool rejected = false;
-    try {
+    SceneDocument document;
+    document.models.assign(original.begin(), original.end());
+    document.lighting.enabled = false;
+    Check(config.SaveScene(document), "Could not prepare transactional restore test");
+    const auto originalBytes = ReadText(scenePath);
+    {
         FileParser assets(context, scenePath);
-        assets.LoadSavedFiles();
-    } catch(const std::runtime_error&) {
-        rejected = true;
+        bool rejected = false;
+        try {
+            assets.LoadSavedFiles();
+        } catch(const std::runtime_error&) {
+            rejected = true;
+        }
+        Check(rejected, "An incompletely registered scene was accepted");
+        auto lighting = assets.GetLighting();
+        lighting.ambientStrength = 0.35f;
+        Check(assets.UpdateLighting(lighting) && assets.IsDirty(),
+              "Could not edit lighting after the failed restore");
+        Check(!assets.SaveScene() && assets.IsDirty(),
+              "Explicit save bypassed the incomplete-restore guard");
+        assets.Shutdown();
+        Check(!assets.SaveScene(), "Stopped scene allowed an explicit save");
     }
-    Check(rejected, "An incompletely registered scene was accepted");
-    const auto saved = config.LoadObjectFromJson();
-    Check(saved.size() == original.size() && saved[1].filePath == original[1].filePath,
+    const auto saved = config.LoadScene();
+    Check(saved.models.size() == original.size() &&
+              saved.models[1].filePath == original[1].filePath &&
+              saved.lighting == document.lighting && ReadText(scenePath) == originalBytes,
           "Failed restoration overwrote the saved scene with a partial prefix");
     CheckGl();
 }
@@ -394,8 +1166,10 @@ void TestScene(WindowSystem& window, const std::filesystem::path& root,
     renderSettings.samples = 0;
     ImguiInterface gui(window.GetWindow());
     Renderer renderer(window.GetContext(), assetRoot, renderSettings);
+    SceneLighting unlit;
+    unlit.enabled = false;
     renderer.BeginScene(64, 64);
-    renderer.DrawScene(draws);
+    renderer.DrawScene(draws, unlit);
     std::array<unsigned char, 4> center{};
     glReadPixels(32, 32, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center.data());
     Check(center[0] > 200 && center[1] > 200 && center[2] > 200,
@@ -423,12 +1197,12 @@ void TestScene(WindowSystem& window, const std::filesystem::path& root,
     for(auto& draw : winding) {
         draw.mirrored = true;
     }
-    renderer.DrawScene(winding);
+    renderer.DrawScene(winding, unlit);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     for(auto& draw : winding) {
         draw.mirrored = false;
     }
-    renderer.DrawScene(winding);
+    renderer.DrawScene(winding, unlit);
     std::array<unsigned char, 4> windingCenter{};
     glReadPixels(32, 32, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, windingCenter.data());
     Check(windingCenter[0] > 200 && windingCenter[1] > 200 && windingCenter[2] > 200,
@@ -440,7 +1214,7 @@ void TestScene(WindowSystem& window, const std::filesystem::path& root,
         draw.alphaCutoff = 0.9f;
         draw.baseColor = {1.0f, 1.0f, 1.0f, 0.5f};
     }
-    renderer.DrawScene(winding);
+    renderer.DrawScene(winding, unlit);
     std::array<unsigned char, 4> masked{};
     glReadPixels(32, 32, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, masked.data());
     Check(masked[0] < 200 && masked[1] < 200 && masked[2] < 200,
@@ -448,7 +1222,7 @@ void TestScene(WindowSystem& window, const std::filesystem::path& root,
     for(auto& draw : winding) {
         draw.alphaCutoff = 0.0f;
     }
-    renderer.DrawScene(winding);
+    renderer.DrawScene(winding, unlit);
     std::array<unsigned char, 4> opaque{};
     glReadPixels(32, 32, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, opaque.data());
     Check(opaque[0] > 200, "Opaque rendering stopped after the masked pass");
@@ -462,22 +1236,51 @@ void TestScene(WindowSystem& window, const std::filesystem::path& root,
     drop(window.GetWindow(), 1, paths);
     glfwSetDropCallback(window.GetWindow(), drop);
     Editor editor(window, renderer, gui, assets);
+    auto authoredLighting = assets.GetLighting();
+    authoredLighting.direction = {0.0f, -3.0f, -4.0f};
+    authoredLighting.color = {0.5f, 0.75f, 1.0f};
+    authoredLighting.intensity = 0.6f;
+    authoredLighting.ambientStrength = 0.15f;
+    Check(assets.UpdateLighting(authoredLighting), "Populated scene lighting edit failed");
     editor.Run(4);
     Check(assets.GetModelViews().size() == 3,
           "Drag-and-drop did not reach the async asset pipeline");
+    Check(assets.UpdateLighting(unlit), "Populated scene could not switch to unlit rendering");
+    editor.Run(1);
+    Check(assets.UpdateLighting(SceneLighting{}), "Populated scene lighting reset failed");
+    edited.rotation = {15.0f, 30.0f, 5.0f};
+    edited.scale = {-1.0f, 1.5f, 0.5f};
+    Check(assets.UpdateTransform(secondId, edited), "Editor-frame nonuniform transform edit failed");
+    editor.Run(1);
+    Check(assets.UpdateLighting(authoredLighting), "Populated scene could not re-enable sunlight");
+    const auto savedLighting = assets.GetLighting();
+    editor.Run(1);
     Check(assets.RemoveModel(firstId) && !assets.GetDescription(firstId),
           "Stable-ID model removal failed");
     Check(assets.GetDescription(secondId).has_value(),
           "Removing a model invalidated another model ID");
     Check(initial[0].description.filePath == PathToUtf8(modelPath),
           "An owned model-name snapshot was invalidated");
-    Check(assets.SaveScene(), "Scene save reported failure");
+    Check(assets.SaveScene() && !assets.IsDirty(), "Scene save reported failure or retained dirty");
     assets.Shutdown();
     assets.Shutdown();
     Check(glIsTexture(textureId) == GL_FALSE, "Scene texture pages outlived shutdown");
-    const auto saved = ConfigManager(scenePath).LoadObjectFromJson();
-    Check(saved.size() == 2 && saved[0].scale.x == -1,
+    const auto saved = ConfigManager(scenePath).LoadScene();
+    Check(saved.models.size() == 2 && saved.models[0].scale.x == -1 &&
+              saved.lighting == savedLighting,
           "Shutdown lost pending models or edited transforms");
+    const auto savedBytes = ReadText(scenePath);
+    {
+        FileParser reopened(window.GetContext(), scenePath, importSettings);
+        reopened.LoadSavedFiles();
+        WaitForModels(reopened, 2);
+        Check(reopened.GetLighting() == savedLighting && !reopened.IsDirty(),
+              "Populated scene did not restore lighting without authoring an edit");
+        Editor reopenedEditor(window, renderer, gui, reopened);
+        reopenedEditor.Run(2);
+        Check(!reopened.IsDirty(), "Reopened populated editor dirtied the scene without an edit");
+    }
+    Check(ReadText(scenePath) == savedBytes, "Reopened populated editor rewrote the scene");
     CheckGl();
 }
 } // namespace
@@ -496,10 +1299,15 @@ int main(int argc, char** argv) {
         TestOwnership(window.GetContext(), argv[1]);
         TestShaderFailures(window.GetContext(), temporary.path, argv[1]);
         TestTexturePages(window.GetContext(), temporary.path);
+        TestLighting(window.GetContext(), argv[1]);
+        TestLightingEdits(window, temporary.path, argv[1]);
+        TestLightingRestore(window.GetContext(), temporary.path);
+        TestLightingSaveFailure(window.GetContext(), temporary.path);
+        TestCachedNormalTransforms(window.GetContext(), temporary.path);
         TestScene(window, temporary.path, argv[1]);
         TestRestoreFailure(window.GetContext(), temporary.path);
         std::cout
-            << "OpenGL ownership, shaders, uploads, rendering, drop, and shutdown tests passed\n";
+            << "OpenGL ownership, shaders, uploads, lighting, scene edits, drop, and shutdown tests passed\n";
         return 0;
     } catch(const std::exception& error) {
         std::cerr << error.what() << '\n';

@@ -3,14 +3,12 @@
 #include "io/SceneTypes.h"
 
 #include <filesystem>
-#include <span>
-#include <vector>
 
 class ConfigManager {
 public:
     explicit ConfigManager(std::filesystem::path filePath);
-    bool SaveObject(std::span<const ModelDescription> models) const;
-    std::vector<ModelDescription> LoadObjectFromJson() const;
+    bool SaveScene(const SceneDocument& scene) const;
+    SceneDocument LoadScene() const;
 
 private:
     std::filesystem::path filePath_;

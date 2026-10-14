@@ -5,16 +5,15 @@ MedievalPort is a C++ OpenGL application for loading, displaying, and manipulati
 > **Note:**  
 > - This project is primarily for learning and experimentation, so you may find a variety of coding styles and approaches, and some code is adapted from various sources.
 > - The main focus is on building a flexible rendering engine.
-> - Full-featured texturing is a planned enhancement and will be integrated in future updates.
 
 ## Features
 
 - **Drag-and-drop model loading:** Easily add new `.obj` models to the scene.
 - **Multiple model support:** Render and manage multiple models at once.
 - **Per-object transformation:** Select objects and translate, rotate, or scale them interactively.
-- **Texture mapping:** Load and display textured models.
-- **Lighting:** Realistic lighting with attenuation and normal mapping.
-- **Configuration saving/loading:** Automatically saves and restores model positions, rotations, scales, and file paths.
+- **Texture mapping:** sRGB diffuse textures, material tint, UV transforms, and alpha masking/blending.
+- **Lighting:** One world-space directional sun with Lambert diffuse lighting, ambient fill, and an explicit unlit mode.
+- **Configuration saving/loading:** Saves model transforms, file paths, and scene lighting through Save Scene or automatically on exit after edits.
 - **Resizable window:** The viewport and projection adjust automatically to window size.
 - **ImGui integration:** User-friendly controls for object selection and transformation.
 - **OpenGL debug output:** Helpful for development and troubleshooting.
@@ -79,7 +78,10 @@ lookup does not depend on the working directory.
 
 - **Drag and drop** `.obj` files into the window to load models.
 - Use the **ImGui panel** to select and transform models.
-- The application automatically saves your scene configuration on exit and restores it on startup.
+- Use **Scene Lighting** to toggle lighting and edit the sun direction, linear RGB color, intensity,
+  and ambient strength. These controls also work without any models loaded.
+- **Save Scene** persists model and lighting edits. The application also saves authored changes on
+  exit and restores the scene on startup. Opening a scene without editing it does not rewrite its file.
 - Scene files default to `model_config.json` beside the executable. Use `--scene path/to/model_config.json`
   to open an existing scene saved elsewhere; relative model paths are resolved against that scene's directory.
 - Use `--assets path/to/res` to override the asset root and `--load path/to/model.obj` to queue a model at startup.
@@ -87,16 +89,40 @@ lookup does not depend on the working directory.
 - OBJ parsing, image decoding, and resizing run on a worker. The context thread uploads at most one
   completed model per frame, shares fixed-size texture-array pages, and culls offscreen bounds.
 
+### Lighting
+
+The sun direction specifies the world-space direction light rays travel, not the direction toward
+the sun: `(0, -1, 0)` shines down. Nonzero directions are normalized when accepted. Sun color is
+linear RGB in `[0, 1]`, intensity ranges from `0` to `4`, and ambient strength ranges from `0` to `1`.
+Invalid edits retain the previous valid settings.
+
+**Reset Lighting** restores the defaults: lighting enabled, white sun, direction
+`normalize(-1, -1, -1)`, intensity `0.8`, and ambient strength `0.2`. Disabling **Enable Lighting**
+restores unlit texture/tint rendering. Lighting changes RGB only; texture alpha, masking, blending,
+the skybox, and the UI keep their existing behavior. Zero-scale models use ambient-only lighting
+where their remaining geometry is visible.
+
+Scene JSON retains the `model` array and adds a `lighting` object containing `enabled`, `direction`,
+`color`, `intensity`, and `ambientStrength`. Existing scenes without `lighting`, missing scene files,
+and legacy `null` empty scenes use the default enabled sun. Explicit `enabled: false` is preserved.
+Malformed or incomplete explicit lighting is rejected rather than treated as a legacy scene.
+
+This is diffuse/ambient lighting only, without shadows, attenuation, normal maps, specular/PBR
+shading, or tone mapping. Unsupported imported material properties continue to produce warnings;
+global ambient fill does not implement OBJ ambient/specular parameters such as `Ka`, `Ks`, or `Ns`.
+
 ### Tests
 
 ```sh
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-CPU tests cover OBJ validation/indexing, material fallbacks, image decode/resize, persistence,
-worker shutdown, camera math, and frustum bounds. They can be built without a graphics driver
-using `-DMEDIEVALPORT_BUILD_APP=OFF`. Enable live OpenGL ownership/rendering/drop-path tests with
-`-DMEDIEVALPORT_ENABLE_GL_TESTS=ON`; these require a desktop driver capable of creating a 4.5 core context.
+CPU tests cover OBJ validation/indexing, material fallbacks, image decode/resize, scene and lighting
+persistence, worker shutdown, camera math, frustum bounds, and robust normal transforms. They can be
+built without a graphics driver using `-DMEDIEVALPORT_BUILD_APP=OFF`. Enable live OpenGL
+ownership/rendering/drop-path tests with
+`-DMEDIEVALPORT_ENABLE_GL_TESTS=ON`; these include directional-lighting and scene-edit regression
+tests and require a desktop driver capable of creating a 4.5 core context.
 `-DMEDIEVALPORT_WARNINGS_AS_ERRORS=ON` enables the same strict project warning policy used by CI.
 CPU-only builds skip GLFW, ImGui, and OpenGL. Scene tests still need Python and GLAD's
 generated headers for vertex-layout checks. With both `-DMEDIEVALPORT_BUILD_APP=OFF` and

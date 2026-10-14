@@ -167,6 +167,13 @@ void Shader::SetUniformMat4f(int location, const glm::mat4& matrix) const {
     }
 }
 
+void Shader::SetUniformMat3f(int location, const glm::mat3& matrix) const {
+    program.RequireCurrent();
+    if(location >= 0) {
+        glProgramUniformMatrix3fv(program.GetId(), location, 1, GL_FALSE, glm::value_ptr(matrix));
+    }
+}
+
 void Shader::SetUniform1i(int location, int value) const {
     program.RequireCurrent();
     if(location >= 0) {
@@ -178,6 +185,13 @@ void Shader::SetUniform1f(int location, float value) const {
     program.RequireCurrent();
     if(location >= 0) {
         glProgramUniform1f(program.GetId(), location, value);
+    }
+}
+
+void Shader::SetUniform3f(int location, const glm::vec3& value) const {
+    program.RequireCurrent();
+    if(location >= 0) {
+        glProgramUniform3fv(program.GetId(), location, 1, glm::value_ptr(value));
     }
 }
 
